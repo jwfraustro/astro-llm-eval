@@ -15,6 +15,7 @@ Tool tiers (the ablation axis):
 from __future__ import annotations
 
 import os
+import dotenv
 from dataclasses import asdict
 from pathlib import Path
 
@@ -23,15 +24,16 @@ from inspect_ai.dataset import MemoryDataset, Sample
 from inspect_ai.solver import basic_agent, system_message
 from inspect_ai.tool import bash, python, web_search
 
-from .prompts import SYSTEM_PROMPT, render_user_prompt
-from .scorer import tap_verify
-from .variants import DEFAULT_VARIANTS, load_variants
+from tasks.gaia_cone.prompts import SYSTEM_PROMPT, render_user_prompt
+from tasks.gaia_cone.scorer import tap_verify
+from tasks.gaia_cone.variants import DEFAULT_VARIANTS, load_variants
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_FILE = REPO_ROOT / "sandbox" / "compose.yaml"
 
 TOOL_TIERS = ("none", "search", "docs")
 
+dotenv.load_dotenv()
 
 @task
 def gaia_cone(
