@@ -91,6 +91,14 @@ Intervals that overlap the window are returned whole by the service; the
 verifier clips both sides to `[t0, t1]` before comparing, so a model that clips
 is not penalised. Boundaries must agree within 90 s.
 
+One asymmetry: the service returns intervals whose *rise* is inside `TIME`
+(so the last one can spill past `t1`) but omits an interval already in
+progress at `t0`, even though the target is up. A model computing from first
+principles will report it. The verifier therefore treats an interval that
+begins at `t0` as optional (`in_progress_at_start` in the score metadata says
+which side had it); pass `strict_window_start=True` to `compare_intervals`
+once the service's semantics are settled.
+
 Every fifth variant is a **negative control** (Dec < −60°, never rises from
 Baltimore) whose correct answer is an empty table. These separate a correct
 "never observable" from the trap the service sets: an unsupported `FACILITY`

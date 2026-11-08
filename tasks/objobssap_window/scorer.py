@@ -15,7 +15,15 @@ from harness.objobssap import ObjObsSAPClient, ObjObsSAPError
 from harness.selfreport import parse_self_report, self_report_agreement
 from tasks.objobssap_window.prompts import RESULT_PATH
 from tasks.objobssap_window.variants import WindowVariant
-from tasks.objobssap_window.verify import INFRA_ERROR, NO_OUTPUT_FILE, UNREADABLE_FILE, Verdict, detect_protocol_use, verify_csv_text
+from tasks.objobssap_window.verify import (
+    ADMITS_NO_VO_RE,
+    INFRA_ERROR,
+    NO_OUTPUT_FILE,
+    UNREADABLE_FILE,
+    Verdict,
+    detect_protocol_use,
+    verify_csv_text,
+)
 
 _MAX_STASH_CHARS = 200_000
 
@@ -99,7 +107,7 @@ def discovery_signals() -> Metric:
     """Rates of the intermediate steps on the way to using the protocol."""
 
     def compute(scores: list[SampleScore]) -> dict[str, float]:
-        keys = ("protocol_named", "spec_read", "source_found", "service_queried", "self_hosted", "local_computation")
+        keys = ("protocol_named", "spec_read", "source_found", "service_queried", "self_hosted", "local_computation", "admits_no_vo")
         return {k: flag_rate(scores, k) for k in keys}
 
     return compute
@@ -121,10 +129,15 @@ def protocol_use():
                 if m.text:
                     other.append(m.text)
                 for call in m.tool_calls or []:
+                    if call.function == "submit":
+                        continue  # a prose recap of the query is not a query
                     pairs.append((json.dumps(call.arguments, default=str), results_by_id.get(call.id, "")))
         sig = detect_protocol_use(pairs, other)
+        admits_no_vo = bool(ADMITS_NO_VO_RE.search(state.output.completion or ""))
 
         steps = [k for k in ("protocol_named", "spec_read", "source_found", "self_hosted", "local_computation") if getattr(sig, k)]
+        if admits_no_vo:
+            steps.append("admits_no_vo")
         if sig.used_protocol:
             explanation = f"queried ObjObsSAP service(s) {sig.hosts}"
         elif sig.queries:
@@ -133,6 +146,8 @@ def protocol_use():
             explanation = "no ObjObsSAP request found"
         if steps:
             explanation += f"; also: {', '.join(steps)}"
-        return Score(value=CORRECT if sig.used_protocol else INCORRECT, explanation=explanation, metadata=sig.as_metadata())
+        metadata = sig.as_metadata()
+        metadata["admits_no_vo"] = admits_no_vo
+        return Score(value=CORRECT if sig.used_protocol else INCORRECT, explanation=explanation, metadata=metadata)
 
     return score

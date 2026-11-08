@@ -136,6 +136,37 @@ def test_faithful_echo_with_spillover_interval_passes():
     assert V.verify_csv_text(text, VARIANT, FakeClient(TRUTH)).passed
 
 
+# Haiku's real run: computed locally, reported the interval already in progress
+# at t0 (61358.3-61358.44) which the service omits, plus three that match.
+HAIKU_VARIANT = WindowVariant(id="h", ra=42.8832, dec=3.0763, t0=61358.3, t1=61361.3, min_obs=30, seed=0, negative_control=False)
+HAIKU_TRUTH = [Interval(61358.92561524315, 61359.43875143258), Interval(61359.922885739245, 61360.43602104671), Interval(61360.92015539482, 61361.43329065014)]
+HAIKU_CSV = "t_start_mjd,t_stop_mjd\n61358.3,61358.441550923424\n61358.925694433376,61359.438773128\n61359.92291663795,61360.43599533258\n61360.92013884253,61361.29988420618\n"
+
+
+def test_in_progress_at_start_is_optional_by_default():
+    v = V.verify_csv_text(HAIKU_CSV, HAIKU_VARIANT, FakeClient(HAIKU_TRUTH))
+    assert v.passed and v.in_progress_at_start == "reported_only" and v.max_boundary_error_s < 30
+
+
+def test_in_progress_at_start_strict():
+    got, _ = V.parse_result_csv(HAIKU_CSV)
+    v = V.compare_intervals(got, HAIKU_TRUTH, HAIKU_VARIANT, strict_window_start=True)
+    assert v.reason == V.INTERVAL_COUNT_MISMATCH
+
+
+def test_in_progress_expected_only_is_also_optional():
+    # If the service is later fixed to return the in-progress interval, a model that omits it still passes.
+    truth = [Interval(61357.92, 61358.441550923424), *HAIKU_TRUTH]
+    text = csv_of([(iv.t_start, iv.t_stop) for iv in HAIKU_TRUTH])
+    v = V.verify_csv_text(text, HAIKU_VARIANT, FakeClient(truth))
+    assert v.passed and v.in_progress_at_start == "expected_only"
+
+
+def test_only_an_in_progress_interval_when_more_expected_fails():
+    v = V.verify_csv_text("t_start_mjd,t_stop_mjd\n61358.3,61358.44\n", HAIKU_VARIANT, FakeClient(HAIKU_TRUTH))
+    assert v.reason == V.EXPECTED_ROWS_GOT_EMPTY
+
+
 def test_truth_drift_detected():
     stored = WindowVariant(**{**VARIANT.__dict__, "expected": [[61000.0, 61000.5], [61001.0, 61001.5]]})
     text = csv_of([(iv.t_start, iv.t_stop) for iv in TRUTH])
@@ -191,6 +222,26 @@ def test_source_found_and_self_hosted():
     ]
     sig = V.detect_protocol_use(pairs)
     assert sig.source_found and sig.self_hosted and sig.used_protocol and sig.hosts == ["localhost"]
+
+
+def test_request_shaped_prose_without_url_or_response_is_ignored():
+    # Sonnet's submit message recapped "POS=42.8832,3.0763, TIME=... MIN_OBS=30"; the scorer
+    # excludes submit calls, but any other URL-less, response-less match must not count either.
+    call = '{"answer": "Queried the service with POS=42.8832,3.0763, TIME=61358.3/61361.3 and MIN_OBS=30."}'
+    sig = V.detect_protocol_use([(call, "Queried the service with POS=42.8832,3.0763 ...")])
+    assert not sig.queries
+
+
+def test_request_without_url_but_with_response_counts():
+    # URL built in an earlier call; this call only carries the params and gets a VOTable back.
+    sig = V.detect_protocol_use([('{"code": "r = s.get(url, params={\'POS\': \'42.88,3.07\', \'MIN_OBS\': 30})\\nprint(r.text)"}', VOTABLE_RESULT)])
+    assert sig.used_protocol and sig.hosts == ["<no-url>"]
+
+
+def test_admits_no_vo_regex():
+    assert V.ADMITS_NO_VO_RE.search("SUCCESS: ...; I did not use a VO protocol service and did not impose a night/Sun constraint.")
+    assert V.ADMITS_NO_VO_RE.search("SUCCESS: computed locally with astropy")
+    assert not V.ADMITS_NO_VO_RE.search("SUCCESS: Queried the VO-Labs ObjObsSAP service")
 
 
 def test_mention_alone_is_not_use():

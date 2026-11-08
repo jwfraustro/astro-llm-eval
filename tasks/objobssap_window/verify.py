@@ -52,6 +52,7 @@ class Verdict:
     max_boundary_error_s: float | None = None
     truth_drift: bool = False  # live service answer differs from the one stored at generation
     infra_error: bool = False
+    in_progress_at_start: str | None = None  # see compare_intervals
 
     def as_metadata(self) -> dict:
         return {
@@ -63,6 +64,7 @@ class Verdict:
             "max_boundary_error_s": self.max_boundary_error_s,
             "truth_drift": self.truth_drift,
             "infra_error": self.infra_error,
+            "in_progress_at_start": self.in_progress_at_start,
         }
 
 
@@ -127,6 +129,7 @@ def compare_intervals(
     variant: WindowVariant,
     *,
     tolerance_s: float = DEFAULT_TOLERANCE_S,
+    strict_window_start: bool = False,
 ) -> Verdict:
     n_rows, n_exp = len(got), len(expected)
 
@@ -138,26 +141,48 @@ def compare_intervals(
     g = normalize(got, variant.t0, variant.t1, variant.min_obs)
     e = normalize(expected, variant.t0, variant.t1, variant.min_obs)
 
+    # Window-start asymmetry. The reference service returns intervals whose
+    # *rise* falls inside TIME, whole (so one can spill past t1), but it does
+    # not return an interval already in progress at t0. A model that computes
+    # or reasons from first principles will report that in-progress interval
+    # (the target really is up), so an interval that begins at t0 is treated
+    # as optional unless ``strict_window_start`` is set: if exactly one side
+    # has it, it is dropped from that side and noted in the verdict.
+    head_g = [iv for iv in g if iv.t_start <= variant.t0 + 1 / 86400]
+    head_e = [iv for iv in e if iv.t_start <= variant.t0 + 1 / 86400]
+    in_progress: str | None = None
+    if not strict_window_start and bool(head_g) != bool(head_e):
+        if head_g:
+            g = [iv for iv in g if iv not in head_g]
+            in_progress = "reported_only"
+        else:
+            e = [iv for iv in e if iv not in head_e]
+            in_progress = "expected_only"
+
     # Rows that exist but never intersect the window must not vanish quietly:
     # on a negative control they are invented observability; otherwise they are
     # in the wrong place (or the wrong time scale).
-    if got and not g:
+    def fail(reason: str, detail: str, **kw) -> Verdict:
+        return Verdict(False, reason, detail, n_rows=n_rows, n_expected=n_exp, in_progress_at_start=in_progress, **kw)
+
+    if got and not g and not in_progress:
         reason = EXPECTED_EMPTY_GOT_ROWS if not e else TIMES_OUTSIDE_WINDOW
-        return Verdict(False, reason, f"{n_rows} row(s) reported, none intersect MJD {variant.t0}-{variant.t1}", n_rows=n_rows, n_expected=n_exp)
+        return fail(reason, f"{n_rows} row(s) reported, none intersect MJD {variant.t0}-{variant.t1}")
 
     if not e and g:
-        return Verdict(False, EXPECTED_EMPTY_GOT_ROWS, f"never observable, but {len(g)} interval(s) reported", n_rows=n_rows, n_expected=n_exp)
+        return fail(EXPECTED_EMPTY_GOT_ROWS, f"never observable, but {len(g)} interval(s) reported")
     if e and not g:
-        return Verdict(False, EXPECTED_ROWS_GOT_EMPTY, f"{len(e)} interval(s) expected, none reported", n_rows=n_rows, n_expected=n_exp)
+        return fail(EXPECTED_ROWS_GOT_EMPTY, f"{len(e)} interval(s) expected, none reported")
     if len(g) != len(e):
-        return Verdict(False, INTERVAL_COUNT_MISMATCH, f"{len(g)} interval(s) reported, {len(e)} expected", n_rows=n_rows, n_expected=n_exp)
+        return fail(INTERVAL_COUNT_MISMATCH, f"{len(g)} interval(s) reported, {len(e)} expected")
 
     worst = 0.0
     for a, b in zip(g, e):
         worst = max(worst, abs(a.t_start - b.t_start) * 86400.0, abs(a.t_stop - b.t_stop) * 86400.0)
     if worst > tolerance_s:
-        return Verdict(False, INTERVAL_BOUNDARY_MISMATCH, f"worst boundary error {worst:.0f}s > {tolerance_s:.0f}s", n_rows=n_rows, n_expected=n_exp, max_boundary_error_s=worst)
-    return Verdict(True, None, f"{len(e)} interval(s) matched within {worst:.0f}s", n_rows=n_rows, n_expected=n_exp, max_boundary_error_s=worst)
+        return fail(INTERVAL_BOUNDARY_MISMATCH, f"worst boundary error {worst:.0f}s > {tolerance_s:.0f}s", max_boundary_error_s=worst)
+    note = f" (in-progress-at-start interval {in_progress.replace('_', ' ')}, ignored)" if in_progress else ""
+    return Verdict(True, None, f"{len(e)} interval(s) matched within {worst:.0f}s{note}", n_rows=n_rows, n_expected=n_exp, max_boundary_error_s=worst, in_progress_at_start=in_progress)
 
 
 def fetch_truth(variant: WindowVariant, client: ObjObsSAPClient) -> tuple[list[Interval], bool]:
@@ -219,6 +244,12 @@ LOCALHOST_RE = re.compile(r"^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:\d+)?$
 # Actual rise/set code, not the word "astroplan" in a pip install line.
 LOCAL_COMPUTE_RE = re.compile(
     r"from\s+astroplan|import\s+astroplan|EarthLocation\(|AltAz\(|Observer\(|get_sun\(|target_rise_time|target_set_time|\.rise_time\(|\.set_time\(",
+)
+
+# The model saying, in its submit message, that it did not use a VO service.
+ADMITS_NO_VO_RE = re.compile(
+    r"did not use (a |the |any )?(VO|Virtual Observatory|ObjObsSAP)|without (using )?(a |the |any )?(VO|Virtual Observatory)|computed (it |this |them )?locally|no VO (protocol|service) (was )?used",
+    re.I,
 )
 
 KNOWN_SERVICE_HOSTS = {
@@ -292,6 +323,11 @@ def detect_protocol_use(tool_pairs: list[tuple[str, str]], other_texts: list[str
         if (m := REQUEST_RE.search(call)) and REQUEST_EXTRA_RE.search(call):
             hosts = _request_hosts(call)
             responded = bool(RESPONSE_RE.search(result or ""))
+            # A request-shaped call with no URL in it (e.g. the URL lives in a
+            # variable from an earlier call, or a prose recap of the query)
+            # only counts if a VOTable actually came back.
+            if hosts == ["<no-url>"] and not responded:
+                continue
             for host in hosts:
                 sig.queries.append(ServiceQuery(host=host, responded=responded, snippet=_snippet(call, m)))
             sig.evidence.append(f"request{'+response' if responded else ' (no VOTable back)'} -> {hosts}: ...{_snippet(call, m)}...")
