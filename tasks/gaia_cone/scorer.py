@@ -8,6 +8,12 @@ Scoring policy:
   counts this as 0, which is the conservative choice; ``infra_error_rate``
   reports how many samples that affected, and ``scripts/rescore.py`` can
   re-verify them later from the CSV text stashed in the score metadata.
+
+A caveat on the metadata-based metrics (``infra_error_rate``,
+``failure_reasons``, ``self_report_calibration``): Inspect reduces epochs
+*before* metrics run, and the reducer keeps only the first epoch's metadata.
+With ``--epochs 1`` they are exact; with more epochs they describe epoch 0.
+``scripts/summarize.py`` reads every epoch and is the source of truth.
 """
 
 from __future__ import annotations
@@ -31,13 +37,29 @@ from inspect_ai.solver import TaskState
 from inspect_ai.util import sandbox
 
 from harness.tap import GaiaVerifier, TAPError
-
-from .prompts import RESULT_PATH
-from .variants import ConeVariant
-from .verify import INFRA_ERROR, NO_OUTPUT_FILE, UNREADABLE_FILE, Verdict, verify_csv_text
+from tasks.gaia_cone.prompts import RESULT_PATH
+from tasks.gaia_cone.variants import ConeVariant
+from tasks.gaia_cone.verify import (
+    INFRA_ERROR,
+    NO_OUTPUT_FILE,
+    UNREADABLE_FILE,
+    Verdict,
+    parse_self_report,
+    self_report_agreement,
+    verify_csv_text,
+)
 
 # Don't stash arbitrarily large files into the log.
 _MAX_STASH_CHARS = 200_000
+
+
+def _histogram(scores: list[SampleScore], key: str, default: str) -> dict[str, float]:
+    counts: dict[str, int] = {}
+    for s in scores:
+        label = str((s.score.metadata or {}).get(key) or default)
+        counts[label] = counts.get(label, 0) + 1
+    total = max(len(scores), 1)
+    return {k: v / total for k, v in sorted(counts.items())}
 
 
 @metric
@@ -47,28 +69,32 @@ def infra_error_rate() -> Metric:
     def compute(scores: list[SampleScore]) -> float:
         if not scores:
             return 0.0
-        n = sum(1 for s in scores if (s.score.metadata or {}).get("infra_error"))
-        return n / len(scores)
+        return sum(1 for s in scores if (s.score.metadata or {}).get("infra_error")) / len(scores)
 
     return compute
 
 
 @metric
 def failure_reasons() -> Metric:
-    """Histogram of mechanical failure reasons as fractions of all samples."""
+    """Histogram of mechanical failure reasons ('pass' for verified samples)."""
 
     def compute(scores: list[SampleScore]) -> dict[str, float]:
-        counts: dict[str, int] = {}
-        for s in scores:
-            reason = (s.score.metadata or {}).get("reason") or ("pass" if s.score.value == CORRECT else "unknown")
-            counts[reason] = counts.get(reason, 0) + 1
-        total = max(len(scores), 1)
-        return {k: v / total for k, v in sorted(counts.items())}
+        return _histogram(scores, "reason", default="pass")
 
     return compute
 
 
-@scorer(metrics=[accuracy(), stderr(), infra_error_rate(), failure_reasons()])
+@metric
+def self_report_calibration() -> Metric:
+    """Histogram of self-report vs verifier agreement (see verify.py)."""
+
+    def compute(scores: list[SampleScore]) -> dict[str, float]:
+        return _histogram(scores, "self_report_agreement", default="unlabeled")
+
+    return compute
+
+
+@scorer(metrics=[accuracy(), stderr(), infra_error_rate(), failure_reasons(), self_report_calibration()])
 def tap_verify(result_path: str = RESULT_PATH, verifier: GaiaVerifier | None = None):
     """Verify the agent's CSV against MAST's Gaia DR3 TAP service."""
     v = verifier or GaiaVerifier()
@@ -99,14 +125,21 @@ def _score(verdict: Verdict, state: TaskState, csv_text: str | None) -> Score:
         value = NOANSWER
     else:
         value = CORRECT if verdict.passed else INCORRECT
+
+    submit_message = state.output.completion
+    self_report = parse_self_report(submit_message)
+
     metadata = verdict.as_metadata()
-    metadata["submit_message"] = state.output.completion
+    metadata["reason"] = verdict.reason or "pass"
+    metadata["submit_message"] = submit_message
+    metadata["self_report"] = self_report
+    metadata["self_report_agreement"] = self_report_agreement(self_report, verdict)
     metadata["n_messages"] = len(state.messages)
     if csv_text is not None:
         metadata["csv_text"] = csv_text[:_MAX_STASH_CHARS]
     return Score(
         value=value,
-        answer=state.output.completion,
-        explanation=f"{verdict.reason or 'pass'}: {verdict.detail}",
+        answer=submit_message,
+        explanation=f"{metadata['reason']}: {verdict.detail} [self-report: {self_report}]",
         metadata=metadata,
     )

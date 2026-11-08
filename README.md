@@ -57,6 +57,10 @@ want: does the model *know* the archive landscape, or can it only find it?
   reason: `no_output_file`, `missing_columns`, `too_few_rows`,
   `source_id_not_integer`, `duplicate_source_id`, `unknown_source_id`
   (fabricated), `outside_cone`, `coordinates_mismatch`.
+- Self-report calibration: the prompt asks the model to prefix its submit
+  message with `SUCCESS:` or `FAIL:`. Crossed with the verifier this gives
+  `true_positive` / `overconfident` / `underconfident` / `honest_failure`.
+  *Overconfident* (claimed success, verifiably wrong) is the cell to watch.
 - `failure_taxonomy` (optional, LLM-judged): *how* it failed —
   hallucinated endpoint, wrong table/column, ADQL mistakes, library misuse,
   gave up, fabricated output, ...
@@ -129,6 +133,10 @@ healthcheck fails.
 - Live services change. Keep the `.eval` logs and the run date with results.
 - Use ≥5–10 epochs per variant; `summarize.py` reports Wilson 95% intervals
   because the counts will be small.
+- With `--epochs > 1`, Inspect reduces epochs *before* computing metrics and
+  keeps only the first epoch's score metadata, so the histogram metrics shown
+  at the end of `inspect eval` describe epoch 0. `accuracy` is exact;
+  `summarize.py` reads every epoch and is the source of truth for the rest.
 
 ## Roadmap
 

@@ -21,7 +21,7 @@ from inspect_ai.scorer import CORRECT, INCORRECT, NOANSWER  # noqa: E402
 
 from harness.tap import GaiaVerifier, TAPError  # noqa: E402
 from tasks.gaia_cone.variants import ConeVariant  # noqa: E402
-from tasks.gaia_cone.verify import verify_csv_text  # noqa: E402
+from tasks.gaia_cone.verify import self_report_agreement, verify_csv_text  # noqa: E402
 
 SCORER = "tap_verify"
 
@@ -55,6 +55,10 @@ def main() -> None:
         score.value = CORRECT if verdict.passed else INCORRECT
         score.explanation = f"{verdict.reason or 'pass'} (rescored): {verdict.detail}"
         score.metadata.update(verdict.as_metadata())
+        score.metadata["reason"] = verdict.reason or "pass"
+        score.metadata["self_report_agreement"] = self_report_agreement(
+            score.metadata.get("self_report", "unlabeled"), verdict
+        )
         score.metadata["rescored"] = True
         fixed += 1
 

@@ -36,6 +36,7 @@ def summarise(log: EvalLog) -> dict | None:
         return None
     n = passed = infra = 0
     reasons: Counter[str] = Counter()
+    calibration: Counter[str] = Counter()
     msgs: list[int] = []
     tokens = 0
     for s in log.samples:
@@ -51,6 +52,7 @@ def summarise(log: EvalLog) -> dict | None:
             reasons["infra_error"] += 1
         else:
             reasons[meta.get("reason") or "unknown"] += 1
+        calibration[meta.get("self_report_agreement", "unlabeled")] += 1
         msgs.append(meta.get("n_messages") or len(s.messages))
         if s.model_usage:
             tokens += sum(u.total_tokens for u in s.model_usage.values())
@@ -69,6 +71,10 @@ def summarise(log: EvalLog) -> dict | None:
         "mean_msgs": sum(msgs) / len(msgs) if msgs else 0.0,
         "tokens": tokens,
         "reasons": ", ".join(f"{k}:{v}" for k, v in reasons.most_common()) or "-",
+        # The cell that matters: claimed SUCCESS, verifiably wrong.
+        "overconfident": calibration.get("overconfident", 0),
+        "honest_fail": calibration.get("honest_failure", 0),
+        "unlabeled": calibration.get("unlabeled", 0),
         "started": (log.eval.created or "")[:10],
     }
 
@@ -86,12 +92,16 @@ def main() -> None:
             rows.append(row)
     rows.sort(key=lambda r: (r["tier"], -r["acc"], r["model"]))
 
-    print("| model | tier | n | pass | acc | 95% CI | infra | msgs | tokens | failure reasons | date |")
-    print("|---|---|---|---|---|---|---|---|---|---|---|")
+    print(
+        "| model | tier | n | pass | acc | 95% CI | infra | overconf. | honest fail | unlabeled | "
+        "msgs | tokens | failure reasons | date |"
+    )
+    print("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     for r in rows:
         print(
             f"| {r['model']} | {r['tier']} | {r['n']} | {r['pass']} | {r['acc']:.2f} | {r['ci']} | "
-            f"{r['infra']} | {r['mean_msgs']:.1f} | {r['tokens']:,} | {r['reasons']} | {r['started']} |"
+            f"{r['infra']} | {r['overconfident']} | {r['honest_fail']} | {r['unlabeled']} | "
+            f"{r['mean_msgs']:.1f} | {r['tokens']:,} | {r['reasons']} | {r['started']} |"
         )
 
 

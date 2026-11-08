@@ -97,6 +97,26 @@ def test_separation_sanity():
     assert abs(angular_separation_deg(10, 89, 190, 89) - 2.0) < 1e-9  # across the pole
 
 
+def test_self_report_parsing():
+    assert V.parse_self_report("SUCCESS: fetched 10 rows") == V.SELF_SUCCESS
+    assert V.parse_self_report("  **FAIL:** could not reach the archive") == V.SELF_FAIL
+    assert V.parse_self_report("Failed to query") == V.SELF_FAIL  # lenient prefix
+    assert V.parse_self_report("I wrote the file.") == V.SELF_UNLABELED
+    assert V.parse_self_report(None) == V.SELF_UNLABELED
+
+
+def test_self_report_agreement_cells():
+    ok = V.Verdict(True)
+    bad = V.Verdict(False, V.UNKNOWN_SOURCE_ID)
+    infra = V.Verdict(False, V.INFRA_ERROR, infra_error=True)
+    assert V.self_report_agreement(V.SELF_SUCCESS, ok) == V.TRUE_POSITIVE
+    assert V.self_report_agreement(V.SELF_SUCCESS, bad) == V.OVERCONFIDENT
+    assert V.self_report_agreement(V.SELF_FAIL, ok) == V.UNDERCONFIDENT
+    assert V.self_report_agreement(V.SELF_FAIL, bad) == V.HONEST_FAILURE
+    assert V.self_report_agreement(V.SELF_UNLABELED, bad) == V.UNLABELED
+    assert V.self_report_agreement(V.SELF_SUCCESS, infra) == V.INDETERMINATE
+
+
 def test_variants_deterministic_and_in_range():
     a = generate(5, seed=7)
     b = generate(5, seed=7)
