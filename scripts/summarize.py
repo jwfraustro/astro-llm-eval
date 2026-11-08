@@ -62,8 +62,8 @@ def summarise(log: EvalLog) -> dict | None:
                 discovery[short] += bool(pm.get(k))
             for h in pm.get("hosts") or []:
                 discovery[f"host:{h}"] += 1
-        never_submitted += not meta.get("submitted", True)
         meta = sc.metadata or {}
+        never_submitted += not meta.get("submitted", True)
         if sc.value == "C":
             passed += 1
         elif meta.get("infra_error"):
