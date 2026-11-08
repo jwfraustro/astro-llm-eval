@@ -66,6 +66,44 @@ want: does the model *know* the archive landscape, or can it only find it?
   gave up, fabricated output, ...
 - Per-sample message count and token usage from the Inspect log.
 
+## Task 2: ObjObsSAP observability window (hard)
+
+*"Using a VO protocol, determine when RA/Dec is observable for at least 30 s
+from an example observatory in Baltimore, MD, between MJD t0 and t1."*
+
+Solving it requires knowing or discovering that IVOA **ObjObsSAP** exists
+(Working Draft, two implementations, not in the registry), finding
+[vo-labs.dev/objobssap](https://vo-labs.dev/objobssap) by search, reading its
+docs page to connect "Baltimore" to the service's default facility, and
+driving the protocol correctly (MJD range syntax, `MIN_OBS`, VOTable output).
+
+Two scorers, read together:
+
+| `interval_verify` (outcome) | `protocol_use` (process) | meaning |
+|---|---|---|
+| pass | pass | used the protocol correctly |
+| pass | fail | computed rise/set locally with astropy |
+| fail | pass | found the service, drove it wrong (see reason) |
+| fail | fail | never got there |
+
+Ground truth is the service's own answer at scoring time (it is deterministic).
+Intervals that overlap the window are returned whole by the service; the
+verifier clips both sides to `[t0, t1]` before comparing, so a model that clips
+is not penalised. Boundaries must agree within 90 s.
+
+Every fifth variant is a **negative control** (Dec < −60°, never rises from
+Baltimore) whose correct answer is an empty table. These separate a correct
+"never observable" from the trap the service sets: an unsupported `FACILITY`
+returns an empty table with `QUERY_STATUS=OK`, not an error
+(`expected_rows_got_empty`).
+
+The `docs` tier for this task hands the model only a pointer to the service,
+not its parameters.
+
+```bash
+TASK=objobssap_window scripts/run.sh anthropic/claude-sonnet-5-5 search 3 --limit 5
+```
+
 ## Quick start
 
 ```bash
@@ -103,9 +141,11 @@ Open-weight models: see [`infra/runpod/README.md`](infra/runpod/README.md).
 
 ```
 sandbox/            Dockerfile + compose.yaml for the agent container (pinned)
-harness/            trusted-side code: MAST TAP verifier client, geometry, LLM judge
+harness/            trusted-side code: MAST TAP + ObjObsSAP clients, geometry,
+                    shared metrics, self-report parsing, LLM judge
 tasks/gaia_cone/    task.py (Inspect task), prompts.py, variants.py/.jsonl,
                     verify.py (pure logic), scorer.py, docs/ (for the docs tier)
+tasks/objobssap_window/  same layout; two scorers (outcome + process)
 configs/models.yaml model registry; edit ids before a run
 infra/runpod/       vLLM launch script and tool-parser notes
 scripts/            run.sh, summarize.py, rescore.py

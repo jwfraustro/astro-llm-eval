@@ -83,25 +83,30 @@ def label_distribution() -> Metric:
 
 
 @scorer(metrics=[label_distribution()])
-def failure_taxonomy(judge_model: str | None = None):
+def failure_taxonomy(judge_model: str | None = None, extra_labels: dict[str, str] | None = None):
+    """Classify the transcript. ``extra_labels`` adds task-specific labels
+    (e.g. ``tasks.objobssap_window.task.JUDGE_LABELS``) to the generic set."""
+    all_labels = {**FAILURE_LABELS, **(extra_labels or {})}
+
     async def score(state: TaskState, target: Target) -> Score:
         judge = get_model(judge_model) if judge_model else get_model(role="judge")
-        labels = "\n".join(f"- {k}: {v}" for k, v in FAILURE_LABELS.items())
+        labels = "\n".join(f"- {k}: {v}" for k, v in all_labels.items())
         prompt = _JUDGE_PROMPT.format(labels=labels, transcript=render_transcript(state.messages))
         result = await judge.generate(prompt)
-        label, evidence = _parse_judgement(result.completion)
+        label, evidence = _parse_judgement(result.completion, all_labels)
         return Score(value=label, explanation=evidence, metadata={"judge": str(judge.name), "raw": result.completion[:2000]})
 
     return score
 
 
-def _parse_judgement(text: str) -> tuple[str, str]:
+def _parse_judgement(text: str, labels: dict[str, str] | None = None) -> tuple[str, str]:
+    labels = labels or FAILURE_LABELS
     match = re.search(r"\{.*\}", text, re.DOTALL)
     if match:
         try:
             obj = json.loads(match.group(0))
             label = str(obj.get("label", "other"))
-            if label not in FAILURE_LABELS:
+            if label not in labels:
                 label = "other"
             return label, str(obj.get("evidence", ""))
         except json.JSONDecodeError:

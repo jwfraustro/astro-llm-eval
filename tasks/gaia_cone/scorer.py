@@ -9,89 +9,26 @@ Scoring policy:
   reports how many samples that affected, and ``scripts/rescore.py`` can
   re-verify them later from the CSV text stashed in the score metadata.
 
-A caveat on the metadata-based metrics (``infra_error_rate``,
-``failure_reasons``, ``self_report_calibration``): Inspect reduces epochs
-*before* metrics run, and the reducer keeps only the first epoch's metadata.
-With ``--epochs 1`` they are exact; with more epochs they describe epoch 0.
-``scripts/summarize.py`` reads every epoch and is the source of truth.
+See ``harness.metrics`` for the caveat on metadata-based metrics with epochs > 1.
 """
 
 from __future__ import annotations
 
 import asyncio
 
-from inspect_ai.scorer import (
-    CORRECT,
-    INCORRECT,
-    NOANSWER,
-    Metric,
-    SampleScore,
-    Score,
-    Target,
-    accuracy,
-    metric,
-    scorer,
-    stderr,
-)
+from inspect_ai.scorer import CORRECT, INCORRECT, NOANSWER, Score, Target, accuracy, scorer, stderr
 from inspect_ai.solver import TaskState
 from inspect_ai.util import sandbox
 
+from harness.metrics import failure_reasons, infra_error_rate, self_report_calibration
+from harness.selfreport import parse_self_report, self_report_agreement
 from harness.tap import GaiaVerifier, TAPError
 from tasks.gaia_cone.prompts import RESULT_PATH
 from tasks.gaia_cone.variants import ConeVariant
-from tasks.gaia_cone.verify import (
-    INFRA_ERROR,
-    NO_OUTPUT_FILE,
-    UNREADABLE_FILE,
-    Verdict,
-    parse_self_report,
-    self_report_agreement,
-    verify_csv_text,
-)
+from tasks.gaia_cone.verify import INFRA_ERROR, NO_OUTPUT_FILE, UNREADABLE_FILE, Verdict, verify_csv_text
 
 # Don't stash arbitrarily large files into the log.
 _MAX_STASH_CHARS = 200_000
-
-
-def _histogram(scores: list[SampleScore], key: str, default: str) -> dict[str, float]:
-    counts: dict[str, int] = {}
-    for s in scores:
-        label = str((s.score.metadata or {}).get(key) or default)
-        counts[label] = counts.get(label, 0) + 1
-    total = max(len(scores), 1)
-    return {k: v / total for k, v in sorted(counts.items())}
-
-
-@metric
-def infra_error_rate() -> Metric:
-    """Fraction of samples where the verifier, not the model, failed."""
-
-    def compute(scores: list[SampleScore]) -> float:
-        if not scores:
-            return 0.0
-        return sum(1 for s in scores if (s.score.metadata or {}).get("infra_error")) / len(scores)
-
-    return compute
-
-
-@metric
-def failure_reasons() -> Metric:
-    """Histogram of mechanical failure reasons ('pass' for verified samples)."""
-
-    def compute(scores: list[SampleScore]) -> dict[str, float]:
-        return _histogram(scores, "reason", default="pass")
-
-    return compute
-
-
-@metric
-def self_report_calibration() -> Metric:
-    """Histogram of self-report vs verifier agreement (see verify.py)."""
-
-    def compute(scores: list[SampleScore]) -> dict[str, float]:
-        return _histogram(scores, "self_report_agreement", default="unlabeled")
-
-    return compute
 
 
 @scorer(metrics=[accuracy(), stderr(), infra_error_rate(), failure_reasons(), self_report_calibration()])

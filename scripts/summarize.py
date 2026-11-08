@@ -18,7 +18,9 @@ from inspect_ai.log import EvalLog, list_eval_logs, read_eval_log
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-SCORER = "tap_verify"
+# Outcome scorers, one per task; the first one present in a log is used.
+PRIMARY_SCORERS = ("tap_verify", "interval_verify")
+PROCESS_SCORER = "protocol_use"
 
 
 def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
@@ -34,16 +36,26 @@ def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
 def summarise(log: EvalLog) -> dict | None:
     if not log.samples:
         return None
-    n = passed = infra = 0
+    present = set().union(*((s.scores or {}).keys() for s in log.samples))
+    primary = next((p for p in PRIMARY_SCORERS if p in present), None)
+    if primary is None:
+        return None
+
+    n = passed = infra = used_protocol = local_compute = 0
+    has_process = PROCESS_SCORER in present
     reasons: Counter[str] = Counter()
     calibration: Counter[str] = Counter()
     msgs: list[int] = []
     tokens = 0
     for s in log.samples:
-        sc = (s.scores or {}).get(SCORER)
+        sc = (s.scores or {}).get(primary)
         if sc is None:
             continue
         n += 1
+        proc = (s.scores or {}).get(PROCESS_SCORER)
+        if proc is not None:
+            used_protocol += proc.value == "C"
+            local_compute += bool((proc.metadata or {}).get("local_computation"))
         meta = sc.metadata or {}
         if sc.value == "C":
             passed += 1
@@ -75,6 +87,9 @@ def summarise(log: EvalLog) -> dict | None:
         "overconfident": calibration.get("overconfident", 0),
         "honest_fail": calibration.get("honest_failure", 0),
         "unlabeled": calibration.get("unlabeled", 0),
+        # Process scorer (ObjObsSAP task only): '-' when the task has none.
+        "protocol": f"{used_protocol}/{n}" if has_process else "-",
+        "local": str(local_compute) if has_process else "-",
         "started": (log.eval.created or "")[:10],
     }
 
@@ -90,17 +105,18 @@ def main() -> None:
         row = summarise(log)
         if row:
             rows.append(row)
-    rows.sort(key=lambda r: (r["tier"], -r["acc"], r["model"]))
+    rows.sort(key=lambda r: (r["task"], r["tier"], -r["acc"], r["model"]))
 
     print(
-        "| model | tier | n | pass | acc | 95% CI | infra | overconf. | honest fail | unlabeled | "
-        "msgs | tokens | failure reasons | date |"
+        "| task | model | tier | n | pass | acc | 95% CI | infra | used VO | local calc | "
+        "overconf. | honest fail | unlabeled | msgs | tokens | failure reasons | date |"
     )
-    print("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+    print("|---|" * 17)
     for r in rows:
         print(
-            f"| {r['model']} | {r['tier']} | {r['n']} | {r['pass']} | {r['acc']:.2f} | {r['ci']} | "
-            f"{r['infra']} | {r['overconfident']} | {r['honest_fail']} | {r['unlabeled']} | "
+            f"| {r['task']} | {r['model']} | {r['tier']} | {r['n']} | {r['pass']} | {r['acc']:.2f} | {r['ci']} | "
+            f"{r['infra']} | {r['protocol']} | {r['local']} | "
+            f"{r['overconfident']} | {r['honest_fail']} | {r['unlabeled']} | "
             f"{r['mean_msgs']:.1f} | {r['tokens']:,} | {r['reasons']} | {r['started']} |"
         )
 
