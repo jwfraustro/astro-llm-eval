@@ -1,0 +1,16 @@
+# vLLM --tool-call-parser values by model family.
+#
+# Getting this wrong makes a capable model look like it cannot call tools at
+# all, so verify against the vLLM docs for the version you pinned before a run:
+# https://docs.vllm.ai/en/stable/features/tool_calling.html
+#
+# Entries marked `verify: true` are from memory and have not been checked
+# against the pinned vLLM version in this repo.
+
+families:
+  qwen2.5:   {parser: hermes}
+  qwen3:     {parser: hermes}
+  llama-3.x: {parser: llama3_json}
+  mistral:   {parser: mistral, note: "may also need --chat-template for older releases"}
+  deepseek-v3: {parser: deepseek_v3, verify: true}
+  gpt-oss:   {parser: openai, verify: true}

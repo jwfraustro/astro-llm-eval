@@ -1,0 +1,40 @@
+# Model registry consumed by scripts/run.sh. The `inspect` field is the Inspect
+# model string; `env` lists variables that must be set for it to work.
+#
+# Model ids drift. Treat every entry here as "edit me" and pin the exact
+# snapshot you ran in the results write-up.
+
+api:
+  - name: claude-sonnet
+    inspect: anthropic/claude-sonnet-5-5
+    env: [ANTHROPIC_API_KEY]
+  - name: claude-haiku
+    inspect: anthropic/claude-haiku-5-5
+    env: [ANTHROPIC_API_KEY]
+  - name: gpt
+    inspect: openai/<fill-in-current-model-id>
+    env: [OPENAI_API_KEY]
+  - name: gemini
+    inspect: google/<fill-in-current-model-id>
+    env: [GOOGLE_API_KEY]
+
+# Open-weight models served from a Runpod pod with vLLM (see infra/runpod/).
+# Inspect's `vllm/` provider talks to an existing server when VLLM_BASE_URL is set:
+#   VLLM_BASE_URL=https://<pod-id>-8000.proxy.runpod.net/v1
+#   VLLM_API_KEY=<whatever you passed to --api-key>
+vllm:
+  - name: qwen3-32b
+    inspect: vllm/Qwen/Qwen3-32B
+    hf_model: Qwen/Qwen3-32B
+    tool_parser: hermes
+    gpu: 1xH100-80GB
+  - name: llama-3.3-70b
+    inspect: vllm/meta-llama/Llama-3.3-70B-Instruct
+    hf_model: meta-llama/Llama-3.3-70B-Instruct
+    tool_parser: llama3_json
+    quant: fp8
+    gpu: 1xH100-80GB
+
+# Judge for harness/judges.py: pass as `--model-role judge=<inspect string>`.
+# Use something cheap and *different* from the model under test.
+judge: anthropic/claude-haiku-5-5

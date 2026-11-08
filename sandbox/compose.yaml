@@ -1,0 +1,12 @@
+# Inspect docker sandbox. One fresh container per sample; Inspect builds the
+# image from ./Dockerfile on first use.
+services:
+  default:
+    build: .
+    init: true
+    command: tail -f /dev/null
+    working_dir: /workspace
+    cpus: 2.0
+    mem_limit: 2gb
+    # Network stays on (default bridge): the task requires reaching TAP
+    # services. Nothing sensitive is mounted into the container.
