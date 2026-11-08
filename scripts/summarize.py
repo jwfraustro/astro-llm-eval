@@ -41,7 +41,8 @@ def summarise(log: EvalLog) -> dict | None:
     if primary is None:
         return None
 
-    n = passed = infra = used_protocol = local_compute = 0
+    n = passed = infra = used_protocol = local_compute = never_submitted = 0
+    discovery: Counter[str] = Counter()
     has_process = PROCESS_SCORER in present
     reasons: Counter[str] = Counter()
     calibration: Counter[str] = Counter()
@@ -54,8 +55,14 @@ def summarise(log: EvalLog) -> dict | None:
         n += 1
         proc = (s.scores or {}).get(PROCESS_SCORER)
         if proc is not None:
+            pm = proc.metadata or {}
             used_protocol += proc.value == "C"
-            local_compute += bool((proc.metadata or {}).get("local_computation"))
+            local_compute += bool(pm.get("local_computation"))
+            for k, short in (("spec_read", "spec"), ("source_found", "src"), ("self_hosted", "selfhost")):
+                discovery[short] += bool(pm.get(k))
+            for h in pm.get("hosts") or []:
+                discovery[f"host:{h}"] += 1
+        never_submitted += not meta.get("submitted", True)
         meta = sc.metadata or {}
         if sc.value == "C":
             passed += 1
@@ -90,6 +97,8 @@ def summarise(log: EvalLog) -> dict | None:
         # Process scorer (ObjObsSAP task only): '-' when the task has none.
         "protocol": f"{used_protocol}/{n}" if has_process else "-",
         "local": str(local_compute) if has_process else "-",
+        "discovery": (", ".join(f"{k}:{v}" for k, v in discovery.most_common()) or "-") if has_process else "-",
+        "never_submitted": never_submitted,
         "started": (log.eval.created or "")[:10],
     }
 
@@ -108,14 +117,14 @@ def main() -> None:
     rows.sort(key=lambda r: (r["task"], r["tier"], -r["acc"], r["model"]))
 
     print(
-        "| task | model | tier | n | pass | acc | 95% CI | infra | used VO | local calc | "
+        "| task | model | tier | n | pass | acc | 95% CI | infra | no submit | used VO | local calc | discovery | "
         "overconf. | honest fail | unlabeled | msgs | tokens | failure reasons | date |"
     )
-    print("|---|" * 17)
+    print("|---|" * 19)
     for r in rows:
         print(
             f"| {r['task']} | {r['model']} | {r['tier']} | {r['n']} | {r['pass']} | {r['acc']:.2f} | {r['ci']} | "
-            f"{r['infra']} | {r['protocol']} | {r['local']} | "
+            f"{r['infra']} | {r['never_submitted']} | {r['protocol']} | {r['local']} | {r['discovery']} | "
             f"{r['overconfident']} | {r['honest_fail']} | {r['unlabeled']} | "
             f"{r['mean_msgs']:.1f} | {r['tokens']:,} | {r['reasons']} | {r['started']} |"
         )

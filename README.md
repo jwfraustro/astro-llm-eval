@@ -97,8 +97,27 @@ Baltimore) whose correct answer is an empty table. These separate a correct
 returns an empty table with `QUERY_STATUS=OK`, not an error
 (`expected_rows_got_empty`).
 
+`protocol_use` works on (tool call, tool result) pairs: a request-shaped call
+(`POS=ra,dec` plus `TIME`/`MIN_OBS`) whose result contains a VOTable. Any host
+counts, including a self-hosted copy of an implementation (`hosts` records
+which). It also records the intermediate steps — `protocol_named`,
+`spec_read`, `source_found`, `self_hosted`, `local_computation` — so a
+transcript that found the spec and the source code but never the running
+service is distinguishable from one that never got anywhere.
+
 The `docs` tier for this task hands the model only a pointer to the service,
 not its parameters.
+
+### A note on the search tool
+
+Inspect's built-in `web_search()` (Tavily) forces `include_answer=True` and
+returns a synthesized answer; source URLs ride along as citations, which the
+model may never see as text. In a Sonnet run, search result text accurately
+described vo-labs.dev's query parameters — and never gave its address. The
+model then found the implementation's source on GitHub, cloned it, and tried to
+self-host it before running out of turns. Both tasks therefore default to
+`harness.tools.web_search_raw`, which returns title / URL / snippet per hit
+(`-T search_tool=inspect` restores the built-in). Same provider for every model.
 
 ```bash
 TASK=objobssap_window scripts/run.sh anthropic/claude-sonnet-5-5 search 3 --limit 5

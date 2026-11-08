@@ -146,26 +146,56 @@ def test_truth_drift_detected():
 # ----------------------------------------------------- process detection
 
 
-def test_detect_service_call_and_response():
-    sig = V.detect_protocol_use(
-        ['{"code": "requests.get(\'https://vo-labs.dev/objobssap/api/query\', params=...)"}'],
-        ["<FIELD name=\"t_observability\" .../>"],
-    )
-    assert sig.used_protocol and sig.service_called and sig.service_response_seen and not sig.local_computation
+VOTABLE_RESULT = '<VOTABLE><INFO name="QUERY_STATUS" value="OK"/><FIELD name="t_start"/><TR><TD>61000.3</TD></TR></VOTABLE>'
 
 
-def test_detect_local_computation_only():
-    sig = V.detect_protocol_use(
-        ['{"code": "from astropy.coordinates import EarthLocation, AltAz\\nloc = EarthLocation(lat=39.3, lon=-76.6)"}'],
-        ["rise 07:28 set 19:38"],
-        ["I will use ObjObsSAP concepts but compute locally"],
-    )
-    assert not sig.used_protocol and sig.local_computation and sig.protocol_named
+def test_detect_curl_request_with_votable_response():
+    call = '{"command": "curl -s \'https://vo-labs.dev/objobssap/api/query?POS=42.88,3.07&TIME=61358.3/61361.3&MIN_OBS=30\'"}'
+    sig = V.detect_protocol_use([(call, VOTABLE_RESULT)])
+    assert sig.used_protocol and sig.hosts == ["vo-labs"] and not sig.local_computation
+
+
+def test_detect_python_params_request():
+    call = '{"code": "r = requests.get(\'https://vo-labs.dev/objobssap/api/query\', params={\'POS\': f\'{ra},{dec}\', \'TIME\': \'61358.3/61361.3\', \'MIN_OBS\': 30})\\nprint(r.text)"}'
+    sig = V.detect_protocol_use([(call, VOTABLE_RESULT)])
+    assert sig.used_protocol and sig.hosts == ["vo-labs"]
+
+
+def test_request_without_response_is_an_attempt_not_use():
+    # Sonnet's actual xmmvischeck attempt: request-shaped, nothing came back.
+    call = '{"command": "curl -s -m 20 \\"http://xmmvischeck.esac.esa.int:8080/objobssap/query?POS=42.8832,3.0763&TIME=61358.3/61361.3&MIN_OBS=30\\" | head -50"}'
+    sig = V.detect_protocol_use([(call, "HTTP/2 200\ndate: ...\n")])
+    assert not sig.used_protocol and sig.queries and sig.hosts == ["esa-xmm"] and not sig.queries[0].responded
+
+
+def test_spec_text_in_result_is_not_a_response():
+    # Regression: curl-ing the Working Draft puts t_observability / VOTABLE text
+    # in a tool result. That is reading, not querying.
+    call = '{"command": "curl -s https://www.ivoa.net/documents/ObjObsSAP/20241118/WD-ObjObsSAP-1.0-20241118.html | sed ..."}'
+    result = 'name="t_observability" ... &lt;VOTABLE xmlns:xsi=... QUERY_STATUS ... t_start'
+    sig = V.detect_protocol_use([(call, result)])
+    assert not sig.used_protocol and not sig.queries and sig.spec_read and sig.protocol_named
+
+
+def test_pip_install_astroplan_is_not_local_computation():
+    sig = V.detect_protocol_use([('{"command": "pip install -q fastapi uvicorn astroplan pydantic-settings"}', "ok")])
+    assert not sig.local_computation
+    sig = V.detect_protocol_use([('{"code": "from astroplan import Observer\\nobs = Observer(latitude=39.3)"}', "ok")])
+    assert sig.local_computation
+
+
+def test_source_found_and_self_hosted():
+    pairs = [
+        ('{"command": "git clone -q https://github.com/jwfraustro/fastapi-objobssap"}', "done"),
+        ('{"command": "curl -s \'http://localhost:8000/objobssap/api/query?POS=42.88,3.07&TIME=61358.3/61361.3&MIN_OBS=30\'"}', VOTABLE_RESULT),
+    ]
+    sig = V.detect_protocol_use(pairs)
+    assert sig.source_found and sig.self_hosted and sig.used_protocol and sig.hosts == ["localhost"]
 
 
 def test_mention_alone_is_not_use():
-    sig = V.detect_protocol_use([], [], ["ObjObsSAP would be the right protocol here."])
-    assert sig.protocol_named and not sig.used_protocol
+    sig = V.detect_protocol_use([], ["ObjObsSAP would be the right protocol here."])
+    assert sig.protocol_named and not sig.used_protocol and not sig.queries
 
 
 # ----------------------------------------------------------------- variants

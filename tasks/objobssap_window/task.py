@@ -27,6 +27,7 @@ from inspect_ai.dataset import MemoryDataset, Sample
 from inspect_ai.solver import basic_agent, system_message
 from inspect_ai.tool import bash, python, web_search
 
+from harness.tools import web_search_raw
 from tasks.objobssap_window.prompts import SYSTEM_PROMPT, render_user_prompt
 from tasks.objobssap_window.scorer import interval_verify, protocol_use
 from tasks.objobssap_window.variants import DEFAULT_VARIANTS, load_variants
@@ -53,18 +54,32 @@ def objobssap_window(
     tool_tier: str = "search",
     variants: str = str(DEFAULT_VARIANTS),
     limit: int | None = None,
-    message_limit: int = 40,
+    message_limit: int = 60,
     tool_timeout: int = 180,
-    time_limit: int = 1200,
+    time_limit: int = 1800,
+    search_tool: str = "raw",
     search_provider: str | None = None,
 ) -> Task:
+    """
+    Args:
+        search_tool: ``raw`` (default) gives the model title/URL/snippet
+            results via :func:`harness.tools.web_search_raw`. ``inspect`` uses
+            Inspect's built-in ``web_search``, which returns a synthesized
+            answer whose source URLs the model may never see; a Sonnet run with
+            it was told what vo-labs.dev does but never where it was.
+    """
     if tool_tier not in TOOL_TIERS:
         raise ValueError(f"tool_tier must be one of {TOOL_TIERS}, got {tool_tier!r}")
 
     tools = [bash(timeout=tool_timeout), python(timeout=tool_timeout)]
     if tool_tier == "search":
-        provider = search_provider or os.environ.get("ASTRO_EVAL_SEARCH_PROVIDER", "tavily")
-        tools.append(web_search(provider))
+        if search_tool == "raw":
+            tools.append(web_search_raw())
+        elif search_tool == "inspect":
+            provider = search_provider or os.environ.get("ASTRO_EVAL_SEARCH_PROVIDER", "tavily")
+            tools.append(web_search(provider))
+        else:
+            raise ValueError(f"search_tool must be 'raw' or 'inspect', got {search_tool!r}")
 
     all_variants = load_variants(Path(variants))
     if limit is not None:
@@ -87,6 +102,6 @@ def objobssap_window(
         scorer=[interval_verify(), protocol_use()],
         sandbox=("docker", str(COMPOSE_FILE)),
         time_limit=time_limit,
-        metadata={"tool_tier": tool_tier, "variants_file": str(variants)},
+        metadata={"tool_tier": tool_tier, "variants_file": str(variants), "search_tool": search_tool if tool_tier == "search" else None},
         tags=["astro", "objobssap", "vo", f"tier:{tool_tier}"],
     )

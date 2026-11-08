@@ -185,56 +185,128 @@ def verify_csv_text(text: str, variant: WindowVariant, client: ObjObsSAPClient, 
 
 
 # ------------------------------------------------------- process detection
+#
+# Detection works on (tool call, tool result) PAIRS. The earlier version looked
+# for VOTable field names anywhere in tool results and tripped on the model
+# curl-ing the ObjObsSAP spec; it also flagged `pip install astroplan` as local
+# computation. Lesson: evidence of *use* must come from a request-shaped call
+# and the response to that same call.
 
-SERVICE_HOST_RE = re.compile(r"vo-labs\.dev/objobssap", re.I)
+# An ObjObsSAP request: a POS=ra,dec pair together with TIME or MIN_OBS, either
+# as URL query syntax or as Python dict/kwarg syntax.
+REQUEST_RE = re.compile(
+    r"""(POS\s*=\s*[-+\d.]+\s*,\s*[-+\d.]+ | ["']POS["']\s*:\s*f?["'][-+\d.{}\w]+\s*,)""",
+    re.I | re.X,
+)
+REQUEST_EXTRA_RE = re.compile(r"TIME\s*[=:]|MIN_OBS", re.I)
+# A VOTable came back (any VOTable: we only ask whether the request got a response).
+RESPONSE_RE = re.compile(r"<VOTABLE|QUERY_STATUS|\bt_start\b", re.I)
+URL_RE = re.compile(r"https?://[^\s\"'\\]+", re.I)
+URL_HOST_RE = re.compile(r"https?://([A-Za-z0-9.\-]+(?::\d+)?)", re.I)
+
+
+def _request_hosts(call: str) -> list[str]:
+    """Hosts of the URLs in a call, preferring ones that carry the query itself."""
+    urls = URL_RE.findall(call)
+    query_urls = [u for u in urls if re.search(r"POS=|/query\b", u, re.I)]
+    hosts = [m.group(1) for u in (query_urls or urls) if (m := URL_HOST_RE.match(u))]
+    return list(dict.fromkeys(hosts)) or ["<no-url>"]
+
 PROTOCOL_NAME_RE = re.compile(r"objobssap|ivo://ivoa\.net/std/ObjObsSAP", re.I)
-VOTABLE_FIELD_RE = re.compile(r"t_observability|time\.validity", re.I)
-LOCAL_COMPUTE_RE = re.compile(r"EarthLocation|AltAz|astroplan|Observer\(|get_sun\(|target_rise_time|target_set_time", re.I)
+SPEC_RE = re.compile(r"ivoa\.net/documents/ObjObsSAP", re.I)
+SOURCE_RE = re.compile(r"github\.com/[\w.\-]+/[\w.\-]*objobssap|fastapi-objobssap|swift-vo", re.I)
+LOCALHOST_RE = re.compile(r"^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:\d+)?$", re.I)
+# Actual rise/set code, not the word "astroplan" in a pip install line.
+LOCAL_COMPUTE_RE = re.compile(
+    r"from\s+astroplan|import\s+astroplan|EarthLocation\(|AltAz\(|Observer\(|get_sun\(|target_rise_time|target_set_time|\.rise_time\(|\.set_time\(",
+)
+
+KNOWN_SERVICE_HOSTS = {
+    "vo-labs.dev": "vo-labs",
+    "xmmvischeck.esac.esa.int:8080": "esa-xmm",
+    "xmmvischeck.esac.esa.int": "esa-xmm",
+}
+
+
+@dataclass
+class ServiceQuery:
+    host: str
+    responded: bool  # a VOTable came back for this request
+    snippet: str
 
 
 @dataclass
 class ProtocolSignals:
-    service_called: bool = False  # service URL appears in a tool call
-    service_response_seen: bool = False  # ObjObsSAP VOTable fields appear in a tool result
+    queries: list[ServiceQuery] = field(default_factory=list)
     protocol_named: bool = False  # the protocol is named anywhere in the transcript
-    local_computation: bool = False  # astropy/astroplan rise-set machinery in tool calls
+    spec_read: bool = False  # fetched the IVOA Working Draft
+    source_found: bool = False  # found an implementation's source code
+    local_computation: bool = False  # astropy/astroplan rise-set code in tool calls
     evidence: list[str] = field(default_factory=list)
 
     @property
+    def service_queried(self) -> bool:
+        return any(q.responded for q in self.queries)
+
+    @property
     def used_protocol(self) -> bool:
-        return self.service_called or self.service_response_seen
+        return self.service_queried
+
+    @property
+    def self_hosted(self) -> bool:
+        return any(LOCALHOST_RE.match(q.host) for q in self.queries)
+
+    @property
+    def hosts(self) -> list[str]:
+        seen: list[str] = []
+        for q in self.queries:
+            label = KNOWN_SERVICE_HOSTS.get(q.host.lower(), "localhost" if LOCALHOST_RE.match(q.host) else q.host)
+            if label not in seen:
+                seen.append(label)
+        return seen
 
     def as_metadata(self) -> dict:
         return {
             "used_protocol": self.used_protocol,
-            "service_called": self.service_called,
-            "service_response_seen": self.service_response_seen,
+            "service_queried": self.service_queried,
+            "query_attempts": len(self.queries),
+            "hosts": self.hosts,
+            "self_hosted": self.self_hosted,
             "protocol_named": self.protocol_named,
+            "spec_read": self.spec_read,
+            "source_found": self.source_found,
             "local_computation": self.local_computation,
-            "evidence": self.evidence[:10],
+            "evidence": self.evidence[:12],
         }
 
 
-def _snippet(text: str, m: re.Match) -> str:
-    lo, hi = max(0, m.start() - 40), min(len(text), m.end() + 40)
+def _snippet(text: str, m: re.Match, pad: int = 50) -> str:
+    lo, hi = max(0, m.start() - pad), min(len(text), m.end() + pad)
     return text[lo:hi].replace("\n", " ")
 
 
-def detect_protocol_use(tool_call_texts: list[str], tool_result_texts: list[str], other_texts: list[str] = ()) -> ProtocolSignals:
+def detect_protocol_use(tool_pairs: list[tuple[str, str]], other_texts: list[str] = ()) -> ProtocolSignals:
+    """Classify the transcript from (tool call text, tool result text) pairs."""
     sig = ProtocolSignals()
-    for t in tool_call_texts:
-        if m := SERVICE_HOST_RE.search(t):
-            sig.service_called = True
-            sig.evidence.append(f"call: ...{_snippet(t, m)}...")
-        if m := LOCAL_COMPUTE_RE.search(t):
+    for call, result in tool_pairs:
+        if (m := REQUEST_RE.search(call)) and REQUEST_EXTRA_RE.search(call):
+            hosts = _request_hosts(call)
+            responded = bool(RESPONSE_RE.search(result or ""))
+            for host in hosts:
+                sig.queries.append(ServiceQuery(host=host, responded=responded, snippet=_snippet(call, m)))
+            sig.evidence.append(f"request{'+response' if responded else ' (no VOTable back)'} -> {hosts}: ...{_snippet(call, m)}...")
+        if m := SPEC_RE.search(call):
+            sig.spec_read = True
+        if m := SOURCE_RE.search(call):
+            if not sig.source_found:
+                sig.evidence.append(f"source: ...{_snippet(call, m)}...")
+            sig.source_found = True
+        if m := LOCAL_COMPUTE_RE.search(call):
+            if not sig.local_computation:
+                sig.evidence.append(f"local: ...{_snippet(call, m)}...")
             sig.local_computation = True
-            sig.evidence.append(f"local: ...{_snippet(t, m)}...")
-    for t in tool_result_texts:
-        if m := VOTABLE_FIELD_RE.search(t):
-            sig.service_response_seen = True
-            sig.evidence.append(f"result: ...{_snippet(t, m)}...")
-    for t in [*tool_call_texts, *tool_result_texts, *other_texts]:
-        if PROTOCOL_NAME_RE.search(t):
+    for t in [*(c for c, _ in tool_pairs), *(r for _, r in tool_pairs), *other_texts]:
+        if PROTOCOL_NAME_RE.search(t or ""):
             sig.protocol_named = True
             break
     return sig
