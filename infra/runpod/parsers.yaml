@@ -9,7 +9,7 @@
 
 families:
   qwen2.5:   {parser: hermes}
-  qwen3:     {parser: hermes}
+  qwen3:     {parser: hermes, reasoning_parser: qwen3, note: "set REASONING_PARSER=qwen3 for the hybrid-thinking checkpoints"}
   llama-3.x: {parser: llama3_json}
   mistral:   {parser: mistral, note: "may also need --chat-template for older releases"}
   deepseek-v3: {parser: deepseek_v3, verify: true}

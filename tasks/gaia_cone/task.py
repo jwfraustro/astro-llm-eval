@@ -25,7 +25,7 @@ from inspect_ai.solver import basic_agent, system_message
 from inspect_ai.tool import bash, python, web_search
 
 from harness.tools import web_search_raw
-from tasks.gaia_cone.prompts import SYSTEM_PROMPT, render_user_prompt
+from tasks.gaia_cone.prompts import render_system_prompt, render_user_prompt
 from tasks.gaia_cone.scorer import tap_verify
 from tasks.gaia_cone.variants import DEFAULT_VARIANTS, load_variants
 
@@ -81,7 +81,7 @@ def gaia_cone(
         name=f"gaia_cone_{tool_tier}",
         dataset=MemoryDataset(samples, name=f"gaia_cone[{tool_tier}]"),
         solver=basic_agent(
-            init=system_message(SYSTEM_PROMPT),
+            init=system_message(render_system_prompt(tool_tier)),
             tools=tools,
             message_limit=message_limit,
             submit_description="Call this once /workspace/result.csv has been written, with a one-sentence summary.",
