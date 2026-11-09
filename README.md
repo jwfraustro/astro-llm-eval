@@ -167,6 +167,7 @@ Open-weight models: see [`infra/runpod/README.md`](infra/runpod/README.md).
 ## Repo layout
 
 ```
+docs/task-ideas.md  backlog of candidate tasks (ADQL, retrieval, reduction)
 sandbox/            Dockerfile + compose.yaml for the agent container (pinned)
 harness/            trusted-side code: MAST TAP + ObjObsSAP clients, geometry,
                     shared metrics, self-report parsing, LLM judge
