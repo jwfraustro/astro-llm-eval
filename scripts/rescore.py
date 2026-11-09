@@ -1,11 +1,13 @@
-"""Re-verify samples that hit an infra error, using the CSV text stashed in
+"""Re-verify samples that hit an infra error, using the result text stashed in
 their score metadata. Rewrites the log in place (or to --out).
 
     python scripts/rescore.py logs/2026-11-08T12-00-00_gaia-cone_abc.eval
 
-Only samples whose ``tap_verify`` score has ``infra_error: true`` are touched;
-model outputs are never re-generated. Run ``summarize.py`` afterwards; it
-recomputes accuracy from sample scores and ignores the stale log header.
+The task is inferred from the scorers present in the log (see
+``tasks.registry``). Only samples whose outcome score has ``infra_error: true``
+are touched; model outputs are never re-generated. Run ``summarize.py``
+afterwards; it recomputes accuracy from sample scores and ignores the stale
+log header.
 """
 
 from __future__ import annotations
@@ -17,39 +19,46 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from inspect_ai.log import read_eval_log, write_eval_log  # noqa: E402
-from inspect_ai.scorer import CORRECT, INCORRECT, NOANSWER  # noqa: E402
+from inspect_ai.scorer import CORRECT, INCORRECT  # noqa: E402
 
-from harness.tap import GaiaVerifier, TAPError  # noqa: E402
-from tasks.gaia_cone.variants import ConeVariant  # noqa: E402
 from harness.selfreport import self_report_agreement  # noqa: E402
-from tasks.gaia_cone.verify import verify_csv_text  # noqa: E402
-
-SCORER = "tap_verify"
+from tasks import registry  # noqa: E402
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("log")
     ap.add_argument("--out", help="write here instead of overwriting")
+    ap.add_argument("--task", help="override the task inferred from the log's scorers")
     args = ap.parse_args()
 
     log = read_eval_log(args.log)
-    verifier = GaiaVerifier()
-    if not verifier.healthcheck():
-        raise SystemExit("MAST TAP still unreachable; nothing to do")
+    samples = log.samples or []
+    if args.task:
+        info = registry.get(args.task)
+    else:
+        present = set().union(*((s.scores or {}).keys() for s in samples)) if samples else set()
+        info = registry.for_scorers(present)
+        if info is None:
+            raise SystemExit(f"no known outcome scorer among {sorted(present)}; pass --task")
+
+    client = info.client_factory()
+    if not client.healthcheck():
+        raise SystemExit(f"{info.service_label} still unreachable; nothing to do")
 
     fixed = still_broken = 0
-    for sample in log.samples or []:
-        score = (sample.scores or {}).get(SCORER)
+    for sample in samples:
+        score = (sample.scores or {}).get(info.outcome_scorer)
         if not score or not (score.metadata or {}).get("infra_error"):
             continue
-        csv_text = score.metadata.get("csv_text")
-        if csv_text is None:
+        # "csv_text" is the key older logs used.
+        text = score.metadata.get("result_text", score.metadata.get("csv_text"))
+        if text is None:
             continue
-        variant = ConeVariant.from_dict(sample.metadata)
+        variant = info.variant_cls.from_dict(sample.metadata)
         try:
-            verdict = verify_csv_text(csv_text, variant, verifier)
-        except TAPError as exc:
+            verdict = info.verify(text, variant, client)
+        except info.service_error as exc:
             still_broken += 1
             score.explanation = f"infra_error (rescore): {exc}"
             continue
@@ -64,7 +73,7 @@ def main() -> None:
         fixed += 1
 
     write_eval_log(log, args.out or args.log)
-    print(f"rescored {fixed} sample(s); {still_broken} still failing on infra; NOANSWER={NOANSWER!r} entries resolved")
+    print(f"[{info.name}] rescored {fixed} sample(s); {still_broken} still failing on infra")
 
 
 if __name__ == "__main__":

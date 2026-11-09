@@ -22,7 +22,7 @@ from inspect_ai.scorer import Scorer
 from inspect_ai.solver import basic_agent, system_message
 from inspect_ai.tool import Tool, bash, python, web_search
 
-from harness.prompts import SUBMIT_DESCRIPTION, check_tool_tier, render_system_prompt
+from harness.prompts import RESULT_PATH, check_tool_tier, render_system_prompt, submit_description
 from harness.tools import web_search_raw
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -91,12 +91,15 @@ def build_task(
     search_provider: str | None = None,
     approval: list[ApprovalPolicy] | None = None,
     tags: Sequence[str] = (),
+    result_path: str = RESULT_PATH,
 ) -> Task:
     """Assemble the Inspect ``Task`` every agent task shares.
 
     ``name`` is the bare task name (``gaia_cone``); the tier is appended so logs
     from different tiers never collide. ``tags`` are task-specific and are
-    added to the common ``astro`` and ``tier:<tier>`` tags.
+    added to the common ``astro`` and ``tier:<tier>`` tags. ``result_path``
+    is where the task tells the model to write its answer; it only feeds the
+    ``submit`` tool's description here, the prompts and scorer get it directly.
     """
     check_tool_tier(tool_tier)
     all_variants = list(variants)
@@ -110,7 +113,7 @@ def build_task(
             init=system_message(render_system_prompt(tool_tier)),
             tools=build_tools(tool_tier, tool_timeout=tool_timeout, search_tool=search_tool, search_provider=search_provider),
             message_limit=message_limit,
-            submit_description=SUBMIT_DESCRIPTION,
+            submit_description=submit_description(result_path),
         ),
         scorer=scorer,
         sandbox=("docker", str(COMPOSE_FILE)),

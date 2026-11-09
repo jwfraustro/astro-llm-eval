@@ -176,6 +176,9 @@ harness/            trusted-side code: MAST TAP + ObjObsSAP clients, geometry,
 tasks/gaia_cone/    task.py (Inspect task), prompts.py (user prompt), variants.py/.jsonl,
                     verify.py (pure logic), scorer.py, docs/ (for the docs tier)
 tasks/objobssap_window/  same layout; two scorers (outcome + process)
+tasks/adql_translate/    same layout; placeholder for the ADQL task set (output is a query)
+tasks/registry.py   per-task facts the scripts need (scorer names, variant class,
+                    verifier, service client); `python -m tasks.registry list`
 configs/models.yaml model registry; edit ids before a run
 infra/runpod/       vLLM launch script and tool-parser notes
 scripts/            run.sh, summarize.py, rescore.py

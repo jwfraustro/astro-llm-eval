@@ -49,7 +49,7 @@ def test_build_score_values_and_calibration():
     assert ok.value == CORRECT
     assert ok.metadata["reason"] == "pass"
     assert ok.metadata["self_report_agreement"] == TRUE_POSITIVE
-    assert ok.metadata["csv_text"] == "a,b\n1,2\n"
+    assert ok.metadata["result_text"] == "a,b\n1,2\n"
     assert ok.metadata["submitted"] is True
     assert ok.explanation.startswith("pass: fine") and "[self-report: success]" in ok.explanation
 
@@ -60,7 +60,7 @@ def test_build_score_values_and_calibration():
 
     honest = S.build_score(Verdict(False, S.NO_OUTPUT_FILE, "missing"), _state("FAIL: nope"), None)
     assert honest.metadata["self_report_agreement"] == HONEST_FAILURE
-    assert "csv_text" not in honest.metadata
+    assert "result_text" not in honest.metadata
 
     infra = S.build_score(Verdict(False, S.INFRA_ERROR, "down", infra_error=True), _state("SUCCESS: done"), "a\n")
     assert infra.value == NOANSWER
@@ -82,4 +82,4 @@ def test_build_score_extra_metadata_and_never_submitted():
 def test_stash_is_truncated():
     big = "x" * (S.MAX_STASH_CHARS + 10)
     sc = S.build_score(Verdict(True), _state("SUCCESS: ok"), big)
-    assert len(sc.metadata["csv_text"]) == S.MAX_STASH_CHARS
+    assert len(sc.metadata["result_text"]) == S.MAX_STASH_CHARS

@@ -1,6 +1,6 @@
-"""Shared skeleton for outcome scorers that verify a CSV the agent wrote.
+"""Shared skeleton for outcome scorers that verify a file the agent wrote.
 
-Every outcome scorer does the same four things: pull ``/workspace/result.csv``
+Every outcome scorer does the same four things: pull the result file
 out of the sandbox, run the task's synchronous verifier off the event loop,
 turn a service outage into an infra error (``NOANSWER``, never blamed on the
 model), and record the self-report calibration alongside the verdict. The
@@ -14,7 +14,7 @@ Scoring policy:
 * ``NOANSWER``  - the verifier itself could not reach its service.
   ``accuracy()`` counts this as 0, the conservative choice;
   ``infra_error_rate`` reports how many samples that affected, and
-  ``scripts/rescore.py`` can re-verify them later from the CSV text stashed in
+  ``scripts/rescore.py`` can re-verify them later from the file text stashed in
   the score metadata.
 """
 
@@ -31,7 +31,7 @@ from inspect_ai.util import sandbox
 from harness.prompts import RESULT_PATH
 from harness.selfreport import parse_self_report, self_report_agreement
 
-# Mechanical failure reasons every CSV task can produce before its own
+# Mechanical failure reasons every file-output task can produce before its own
 # verifier gets a look at the contents.
 NO_OUTPUT_FILE = "no_output_file"
 UNREADABLE_FILE = "unreadable_file"
@@ -72,7 +72,7 @@ def never_submitted_rate() -> Metric:
     return compute
 
 
-def build_score(verdict: VerdictLike, state: TaskState, csv_text: str | None, **extra_metadata: Any) -> Score:
+def build_score(verdict: VerdictLike, state: TaskState, result_text: str | None, **extra_metadata: Any) -> Score:
     """Turn a verdict into an Inspect ``Score`` with the common metadata."""
     value = NOANSWER if verdict.infra_error else (CORRECT if verdict.passed else INCORRECT)
     submit_message = state.output.completion
@@ -89,8 +89,8 @@ def build_score(verdict: VerdictLike, state: TaskState, csv_text: str | None, **
         n_messages=len(state.messages),
     )
     metadata.update(extra_metadata)
-    if csv_text is not None:
-        metadata["csv_text"] = csv_text[:MAX_STASH_CHARS]
+    if result_text is not None:
+        metadata["result_text"] = result_text[:MAX_STASH_CHARS]
 
     suffix = f" [self-report: {self_report}]" if was_submitted else " [never submitted: hit a limit]"
     return Score(
@@ -101,8 +101,8 @@ def build_score(verdict: VerdictLike, state: TaskState, csv_text: str | None, **
     )
 
 
-def csv_outcome_scorer(
-    verify_csv_text: Callable[[str, Any, Any], VerdictLike],
+def file_outcome_scorer(
+    verify_text: Callable[[str, Any, Any], VerdictLike],
     variant_cls: type,
     client: Any,
     service_error: type[Exception] | tuple[type[Exception], ...],
@@ -111,9 +111,9 @@ def csv_outcome_scorer(
     result_path: str = RESULT_PATH,
     extra_metadata: Callable[[TaskState], dict[str, Any]] | None = None,
 ) -> Callable[[TaskState, Target], Any]:
-    """Build the async ``score`` function for a CSV-verifying outcome scorer.
+    """Build the async ``score`` function for a file-verifying outcome scorer.
 
-    ``verify_csv_text(text, variant, client)`` is the task's pure verifier; it
+    ``verify_text(text, variant, client)`` is the task's pure verifier; it
     may raise ``service_error`` when its service is unreachable. ``verdict_cls``
     is the task's ``Verdict`` dataclass, constructed positionally as
     ``(passed, reason, detail)`` for the pre-verification failures here.
@@ -134,7 +134,7 @@ def csv_outcome_scorer(
 
         # 2. Verify. Service clients are synchronous; keep the event loop free.
         try:
-            verdict = await asyncio.to_thread(verify_csv_text, text, variant, client)
+            verdict = await asyncio.to_thread(verify_text, text, variant, client)
         except service_error as exc:
             verdict = verdict_cls(False, INFRA_ERROR, str(exc), infra_error=True)
         return build_score(verdict, state, text, **extra)

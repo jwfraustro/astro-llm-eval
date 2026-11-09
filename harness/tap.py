@@ -16,6 +16,7 @@ Gaia id does not survive a round trip through a double.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass
 from typing import Iterable, Sequence
@@ -38,6 +39,15 @@ class TAPError(RuntimeError):
 
     This is an infrastructure failure, not a model failure. Scorers must not
     convert it into INCORRECT.
+    """
+
+
+class QueryRejected(TAPError):
+    """The service answered, and said the ADQL was wrong (HTTP 4xx).
+
+    For the verifier's own queries this is still an infra bug, hence the
+    subclassing. A task that runs *the model's* query catches this first and
+    scores it INCORRECT.
     """
 
 
@@ -86,6 +96,10 @@ class GaiaVerifier:
 
     def sync_query(self, adql: str) -> list[list]:
         """Run a synchronous ADQL query and return the ``data`` rows."""
+        return self.sync_query_full(adql)[1]
+
+    def sync_query_full(self, adql: str) -> tuple[list[str], list[list]]:
+        """Run a synchronous ADQL query; return ``(column_names, rows)``."""
         params = {
             "REQUEST": "doQuery",
             "LANG": "ADQL",
@@ -110,7 +124,8 @@ class GaiaVerifier:
                 continue
             if resp.status_code != 200:
                 # Bad ADQL or a changed service: retrying will not help.
-                raise TAPError(f"HTTP {resp.status_code} for query {adql!r}: {resp.text[:500]}")
+                detail = f"HTTP {resp.status_code} for query {adql!r}: {_error_text(resp.text)}"
+                raise QueryRejected(detail) if 400 <= resp.status_code < 500 else TAPError(detail)
 
             try:
                 payload = resp.json()
@@ -118,7 +133,8 @@ class GaiaVerifier:
                 raise TAPError(f"non-JSON response: {resp.text[:200]}") from exc
             if not isinstance(payload, dict) or "data" not in payload:
                 raise TAPError(f"unexpected response shape: {str(payload)[:200]}")
-            return payload["data"]
+            columns = [str(c.get("name", "")) for c in payload.get("info", []) if isinstance(c, dict)]
+            return columns, payload["data"]
 
         raise TAPError(f"TAP query failed after {self.retries} attempts: {last_exc}")
 
@@ -174,6 +190,16 @@ class GaiaVerifier:
 
     def close(self) -> None:
         self._client.close()
+
+
+_VOTABLE_INFO_RE = re.compile(r'<INFO[^>]*name="QUERY_STATUS"[^>]*>(.*?)</INFO>', re.DOTALL)
+
+
+def _error_text(body: str, limit: int = 500) -> str:
+    """TAP errors come back as a VOTable; pull out the human-readable part."""
+    m = _VOTABLE_INFO_RE.search(body)
+    text = " ".join((m.group(1) if m else body).split())
+    return text[:limit]
 
 
 def _chunks(seq: Sequence[int], n: int) -> Iterable[Sequence[int]]:

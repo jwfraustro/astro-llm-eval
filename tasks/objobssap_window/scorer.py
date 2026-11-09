@@ -16,7 +16,7 @@ from inspect_ai.solver import TaskState
 from harness.metrics import failure_reasons, flag_rate, infra_error_rate, self_report_calibration
 from harness.objobssap import ObjObsSAPClient, ObjObsSAPError
 from harness.prompts import RESULT_PATH
-from harness.scoring import csv_outcome_scorer, never_submitted_rate
+from harness.scoring import file_outcome_scorer, never_submitted_rate
 from tasks.objobssap_window.variants import WindowVariant
 from tasks.objobssap_window.verify import ADMITS_NO_VO_RE, Verdict, detect_protocol_use, verify_csv_text
 
@@ -38,7 +38,7 @@ def _negative_control(state: TaskState) -> dict:
 @scorer(metrics=[accuracy(), stderr(), infra_error_rate(), failure_reasons(), self_report_calibration(), truth_drift_rate(), never_submitted_rate()])
 def interval_verify(result_path: str = RESULT_PATH, client: ObjObsSAPClient | None = None):
     """Outcome: do the reported intervals match the service's answer?"""
-    return csv_outcome_scorer(
+    return file_outcome_scorer(
         verify_csv_text,
         WindowVariant,
         client or ObjObsSAPClient(),

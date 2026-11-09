@@ -35,7 +35,10 @@ cases, provide a clear and concise summary of what happened. Do not call
 # self-report against the verifier's verdict (see harness.selfreport) to
 # measure whether a model knows when it has failed.
 
-SUBMIT_DESCRIPTION = f"Call this once {RESULT_PATH} has been written, with a one-sentence summary."
+
+def submit_description(result_path: str = RESULT_PATH) -> str:
+    return f"Call this once {result_path} has been written, with a one-sentence summary."
+
 
 # The system prompt must name every tool the tier actually provides. Saying
 # "bash and Python" while also handing over a search tool is a contradiction

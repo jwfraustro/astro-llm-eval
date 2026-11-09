@@ -18,9 +18,7 @@ from inspect_ai.log import EvalLog, list_eval_logs, read_eval_log
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-# Outcome scorers, one per task; the first one present in a log is used.
-PRIMARY_SCORERS = ("tap_verify", "interval_verify")
-PROCESS_SCORER = "protocol_use"
+from tasks.registry import OUTCOME_SCORERS, PROCESS_SCORERS  # noqa: E402
 
 
 def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
@@ -37,13 +35,14 @@ def summarise(log: EvalLog) -> dict | None:
     if not log.samples:
         return None
     present = set().union(*((s.scores or {}).keys() for s in log.samples))
-    primary = next((p for p in PRIMARY_SCORERS if p in present), None)
+    primary = next((p for p in OUTCOME_SCORERS if p in present), None)
     if primary is None:
         return None
+    process = next((p for p in PROCESS_SCORERS if p in present), None)
 
     n = passed = infra = used_protocol = local_compute = never_submitted = 0
     discovery: Counter[str] = Counter()
-    has_process = PROCESS_SCORER in present
+    has_process = process is not None
     reasons: Counter[str] = Counter()
     calibration: Counter[str] = Counter()
     msgs: list[int] = []
@@ -53,7 +52,7 @@ def summarise(log: EvalLog) -> dict | None:
         if sc is None:
             continue
         n += 1
-        proc = (s.scores or {}).get(PROCESS_SCORER)
+        proc = (s.scores or {}).get(process) if process else None
         if proc is not None:
             pm = proc.metadata or {}
             used_protocol += proc.value == "C"
