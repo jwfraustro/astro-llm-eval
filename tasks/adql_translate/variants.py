@@ -17,12 +17,11 @@ Run as a script to (re)generate ``variants.jsonl``::
 
 from __future__ import annotations
 
-import argparse
-import json
 import random
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
+
+from harness.variants import Variant, variant_cli
 
 HERE = Path(__file__).resolve().parent
 DEFAULT_VARIANTS = HERE / "variants.jsonl"
@@ -38,18 +37,12 @@ LIMIT_RANGE = (1, 12)
 
 
 @dataclass(frozen=True)
-class TranslateVariant:
-    id: str
+class TranslateVariant(Variant):
     source_sql: str  # what the model is given
     gold_adql: str  # what the verifier runs; never shown to the model
     table: str
     columns: str
     limit: int
-    seed: int
-
-    @classmethod
-    def from_dict(cls, d: dict) -> "TranslateVariant":
-        return cls(**{k: d[k] for k in cls.__dataclass_fields__})
 
 
 def generate(n: int, *, seed: int, client=None) -> list[TranslateVariant]:
@@ -70,53 +63,31 @@ def generate(n: int, *, seed: int, client=None) -> list[TranslateVariant]:
         out.append(
             TranslateVariant(
                 id=f"adql_translate-{seed}-{idx:03d}",
+                seed=seed,
                 source_sql=f"SELECT {columns} FROM {table} LIMIT {limit}",
                 gold_adql=gold,
                 table=table,
                 columns=columns,
                 limit=limit,
-                seed=seed,
             )
         )
     return out
 
 
-def write_variants(variants: list[TranslateVariant], path: Path = DEFAULT_VARIANTS) -> None:
-    with path.open("w") as fh:
-        for v in variants:
-            fh.write(json.dumps(asdict(v)) + "\n")
-
-
-def iter_variants(path: Path = DEFAULT_VARIANTS) -> Iterator[TranslateVariant]:
-    with Path(path).open() as fh:
-        for line in fh:
-            if line.strip():
-                yield TranslateVariant.from_dict(json.loads(line))
-
-
 def load_variants(path: Path = DEFAULT_VARIANTS) -> list[TranslateVariant]:
-    return list(iter_variants(path))
+    return TranslateVariant.load(path)
 
 
 def _main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--n", type=int, default=10)
-    ap.add_argument("--seed", type=int, default=2026)
-    ap.add_argument("--out", type=Path, default=DEFAULT_VARIANTS)
-    ap.add_argument("--check", action="store_true", help="run each gold query against MAST TAP")
-    args = ap.parse_args()
+    from harness.tap import GaiaVerifier
 
-    client = None
-    if args.check:
-        from harness.tap import GaiaVerifier
-
-        client = GaiaVerifier()
-        if not client.healthcheck():
-            raise SystemExit("MAST TAP healthcheck failed; refusing to generate unchecked variants with --check")
-
-    variants = generate(args.n, seed=args.seed, client=client)
-    write_variants(variants, args.out)
-    print(f"wrote {len(variants)} variants to {args.out}")
+    variant_cli(
+        __doc__,
+        default_out=DEFAULT_VARIANTS,
+        check_client=GaiaVerifier,
+        check_help="run each gold query against MAST TAP",
+        make=lambda args, client: generate(args.n, seed=args.seed, client=client),
+    )
 
 
 if __name__ == "__main__":

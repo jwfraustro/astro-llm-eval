@@ -11,44 +11,27 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from harness import scoring as _shared
+from harness import verdict as _base
 from harness.tap import GaiaVerifier, QueryRejected
 from tasks.adql_translate.variants import TranslateVariant
 
 # Mechanical failure reasons.
-NO_OUTPUT_FILE = _shared.NO_OUTPUT_FILE
-UNREADABLE_FILE = _shared.UNREADABLE_FILE
+NO_OUTPUT_FILE = _base.NO_OUTPUT_FILE
+UNREADABLE_FILE = _base.UNREADABLE_FILE
 EMPTY_QUERY = "empty_query"
 QUERY_REJECTED = "query_rejected"  # the service returned 4xx for the model's ADQL
 COLUMNS_MISMATCH = "columns_mismatch"
 ROW_COUNT_MISMATCH = "row_count_mismatch"
-INFRA_ERROR = _shared.INFRA_ERROR
+INFRA_ERROR = _base.INFRA_ERROR
 
 _FENCE_CHARS = "`"
 
 
 @dataclass
-class Verdict:
-    passed: bool
-    reason: str | None = None
-    detail: str = ""
-    n_rows: int = 0
+class Verdict(_base.Verdict):
     n_expected: int = 0
-    infra_error: bool = False
     columns: list[str] = field(default_factory=list)
     expected_columns: list[str] = field(default_factory=list)
-
-    def as_metadata(self) -> dict:
-        return {
-            "passed": self.passed,
-            "reason": self.reason or "pass",
-            "detail": self.detail,
-            "n_rows": self.n_rows,
-            "n_expected": self.n_expected,
-            "infra_error": self.infra_error,
-            "columns": self.columns,
-            "expected_columns": self.expected_columns,
-        }
 
 
 def parse_query_text(text: str) -> tuple[str | None, Verdict | None]:

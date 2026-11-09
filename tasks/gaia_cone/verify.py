@@ -7,20 +7,20 @@ CSV (see ``scripts/rescore.py``) if MAST was unreachable during the eval.
 
 from __future__ import annotations
 
-import csv
-import io
 from dataclasses import dataclass, field
 
-from harness import scoring as _shared
+from harness import verdict as _base
+from harness import csvio as _csvio
+from harness.csvio import CsvError, cell, read_result_csv, require_columns
 from harness.geometry import angular_separation_deg
 from harness.tap import GaiaVerifier
 from tasks.gaia_cone.variants import ConeVariant
 
 # Mechanical failure reasons. These are *not* the LLM-judged taxonomy in
 # harness/judges.py; they are what the verifier can establish on its own.
-NO_OUTPUT_FILE = _shared.NO_OUTPUT_FILE
-UNREADABLE_FILE = _shared.UNREADABLE_FILE
-MISSING_COLUMNS = "missing_columns"
+NO_OUTPUT_FILE = _base.NO_OUTPUT_FILE
+UNREADABLE_FILE = _base.UNREADABLE_FILE
+MISSING_COLUMNS = _csvio.MISSING_COLUMNS
 TOO_FEW_ROWS = "too_few_rows"
 SOURCE_ID_NOT_INTEGER = "source_id_not_integer"
 COORDS_NOT_NUMERIC = "coordinates_not_numeric"
@@ -28,7 +28,7 @@ DUPLICATE_SOURCE_ID = "duplicate_source_id"
 UNKNOWN_SOURCE_ID = "unknown_source_id"  # fabricated, or wrong catalog/release
 OUTSIDE_CONE = "outside_cone"
 COORDS_MISMATCH = "coordinates_mismatch"  # real id, made-up position
-INFRA_ERROR = _shared.INFRA_ERROR
+INFRA_ERROR = _base.INFRA_ERROR
 
 REQUIRED_COLUMNS = ("source_id", "ra", "dec")
 
@@ -41,62 +41,32 @@ class ResultRow:
 
 
 @dataclass
-class Verdict:
-    passed: bool
-    reason: str | None = None  # one of the constants above when not passed
-    detail: str = ""
-    n_rows: int = 0
+class Verdict(_base.Verdict):
     n_found: int = 0
     n_in_cone: int = 0
-    infra_error: bool = False
     bad_ids: list[int] = field(default_factory=list)
-
-    def as_metadata(self) -> dict:
-        return {
-            "passed": self.passed,
-            "reason": self.reason,
-            "detail": self.detail,
-            "n_rows": self.n_rows,
-            "n_found": self.n_found,
-            "n_in_cone": self.n_in_cone,
-            "infra_error": self.infra_error,
-            "bad_ids": [str(i) for i in self.bad_ids[:20]],
-        }
 
 
 def parse_result_csv(text: str) -> tuple[list[ResultRow] | None, Verdict | None]:
     """Parse the model's CSV. Returns (rows, None) or (None, failing Verdict)."""
     try:
-        reader = csv.DictReader(io.StringIO(text))
-        if reader.fieldnames is None:
-            return None, Verdict(False, UNREADABLE_FILE, "empty file")
-        # Normalise header names so `Source_ID` or ` ra ` still count.
-        reader.fieldnames = [f.strip().lower() for f in reader.fieldnames]
-        raw_rows = list(reader)
-    except csv.Error as exc:
-        return None, Verdict(False, UNREADABLE_FILE, f"csv parse error: {exc}")
-
-    missing = [c for c in REQUIRED_COLUMNS if c not in reader.fieldnames]
-    if missing:
-        return None, Verdict(
-            False, MISSING_COLUMNS, f"missing {missing}; got {reader.fieldnames}", n_rows=len(raw_rows)
-        )
+        table = read_result_csv(text)
+        require_columns(table, REQUIRED_COLUMNS)
+    except CsvError as exc:
+        return None, Verdict(False, exc.reason, exc.detail, n_rows=exc.n_rows)
 
     rows: list[ResultRow] = []
-    for i, r in enumerate(raw_rows, start=1):
-        sid_text = (r.get("source_id") or "").strip()
+    for i, r in enumerate(table.rows, start=1):
+        sid_text = cell(r, "source_id")
         # int() must succeed on the literal text: "1.23e18" or "123.0" means the
         # id went through a float somewhere and cannot be trusted.
         if not sid_text.lstrip("-").isdigit():
-            return None, Verdict(
-                False, SOURCE_ID_NOT_INTEGER, f"row {i}: source_id={sid_text!r}", n_rows=len(raw_rows)
-            )
+            return None, Verdict(False, SOURCE_ID_NOT_INTEGER, f"row {i}: source_id={sid_text!r}", n_rows=len(table))
         try:
-            ra = float((r.get("ra") or "").strip())
-            dec = float((r.get("dec") or "").strip())
+            ra, dec = float(cell(r, "ra")), float(cell(r, "dec"))
         except ValueError:
             return None, Verdict(
-                False, COORDS_NOT_NUMERIC, f"row {i}: ra={r.get('ra')!r} dec={r.get('dec')!r}", n_rows=len(raw_rows)
+                False, COORDS_NOT_NUMERIC, f"row {i}: ra={r.get('ra')!r} dec={r.get('dec')!r}", n_rows=len(table)
             )
         rows.append(ResultRow(int(sid_text), ra, dec))
     return rows, None
@@ -172,18 +142,3 @@ def verify_csv_text(text: str, variant: ConeVariant, verifier: GaiaVerifier) -> 
     assert rows is not None
     return verify_rows(rows, variant, verifier)
 
-
-# Self-report parsing lives in harness.selfreport; re-exported here for callers.
-from harness.selfreport import (  # noqa: E402, F401
-    HONEST_FAILURE,
-    INDETERMINATE,
-    OVERCONFIDENT,
-    SELF_FAIL,
-    SELF_SUCCESS,
-    SELF_UNLABELED,
-    TRUE_POSITIVE,
-    UNDERCONFIDENT,
-    UNLABELED,
-    parse_self_report,
-    self_report_agreement,
-)

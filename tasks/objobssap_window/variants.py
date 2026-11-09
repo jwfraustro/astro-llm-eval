@@ -16,12 +16,12 @@ as ``truth_drift`` in the logs instead of silently rewriting history::
 from __future__ import annotations
 
 import argparse
-import json
-import math
 import random
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator
+
+from harness.geometry import random_sky_position
+from harness.variants import Variant, variant_cli
 
 HERE = Path(__file__).resolve().parent
 DEFAULT_VARIANTS = HERE / "variants.jsonl"
@@ -41,26 +41,14 @@ DURATION_DAYS = (3, 7)
 
 
 @dataclass(frozen=True)
-class WindowVariant:
-    id: str
+class WindowVariant(Variant):
     ra: float
     dec: float
     t0: float  # MJD
     t1: float  # MJD
     min_obs: int  # seconds
-    seed: int
     negative_control: bool
     expected: list[list[float]] | None = field(default=None)  # [[t_start, t_stop], ...] from --check
-
-    @classmethod
-    def from_dict(cls, d: dict) -> "WindowVariant":
-        return cls(**{k: d.get(k) for k in cls.__dataclass_fields__})
-
-
-def _sample_dec(rng: random.Random, lo: float, hi: float) -> float:
-    """Uniform on the sphere between two declinations."""
-    s_lo, s_hi = math.sin(math.radians(lo)), math.sin(math.radians(hi))
-    return math.degrees(math.asin(rng.uniform(s_lo, s_hi)))
 
 
 def generate(n: int, *, seed: int, min_obs: int = 30, client=None, negative_every: int = 5) -> list[WindowVariant]:
@@ -68,8 +56,9 @@ def generate(n: int, *, seed: int, min_obs: int = 30, client=None, negative_ever
     out: list[WindowVariant] = []
     for idx in range(n):
         negative = negative_every > 0 and idx % negative_every == negative_every - 1
-        ra = round(rng.uniform(0.0, 360.0), 4)
-        dec = round(_sample_dec(rng, -90.0, NEVER_RISES_DEC_MAX) if negative else _sample_dec(rng, POSITIVE_DEC_MIN, POSITIVE_DEC_MAX), 4)
+        band = (-90.0, NEVER_RISES_DEC_MAX) if negative else (POSITIVE_DEC_MIN, POSITIVE_DEC_MAX)
+        ra, dec = random_sky_position(rng, dec_min=band[0], dec_max=band[1])
+        ra, dec = round(ra, 4), round(dec, 4)
         t0 = round(rng.uniform(MJD_MIN, MJD_MAX), 1)
         t1 = round(t0 + rng.randint(*DURATION_DAYS), 1)
 
@@ -85,12 +74,12 @@ def generate(n: int, *, seed: int, min_obs: int = 30, client=None, negative_ever
         out.append(
             WindowVariant(
                 id=f"objobssap_window-{seed}-{idx:03d}",
+                seed=seed,
                 ra=ra,
                 dec=dec,
                 t0=t0,
                 t1=t1,
                 min_obs=min_obs,
-                seed=seed,
                 negative_control=negative,
                 expected=expected,
             )
@@ -98,44 +87,25 @@ def generate(n: int, *, seed: int, min_obs: int = 30, client=None, negative_ever
     return out
 
 
-def write_variants(variants: list[WindowVariant], path: Path = DEFAULT_VARIANTS) -> None:
-    with path.open("w") as fh:
-        for v in variants:
-            fh.write(json.dumps(asdict(v)) + "\n")
-
-
-def iter_variants(path: Path = DEFAULT_VARIANTS) -> Iterator[WindowVariant]:
-    with Path(path).open() as fh:
-        for line in fh:
-            if line.strip():
-                yield WindowVariant.from_dict(json.loads(line))
-
-
 def load_variants(path: Path = DEFAULT_VARIANTS) -> list[WindowVariant]:
-    return list(iter_variants(path))
+    return WindowVariant.load(path)
 
 
 def _main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--n", type=int, default=20)
-    ap.add_argument("--seed", type=int, default=2026)
-    ap.add_argument("--min-obs", type=int, default=30)
-    ap.add_argument("--out", type=Path, default=DEFAULT_VARIANTS)
-    ap.add_argument("--check", action="store_true", help="record the service's answer for each variant")
-    args = ap.parse_args()
+    from harness.objobssap import ObjObsSAPClient
 
-    client = None
-    if args.check:
-        from harness.objobssap import ObjObsSAPClient
+    def add_arguments(ap: argparse.ArgumentParser) -> None:
+        ap.add_argument("--min-obs", type=int, default=30)
 
-        client = ObjObsSAPClient()
-        if not client.healthcheck():
-            raise SystemExit("ObjObsSAP healthcheck failed")
-
-    variants = generate(args.n, seed=args.seed, min_obs=args.min_obs, client=client)
-    write_variants(variants, args.out)
-    n_neg = sum(v.negative_control for v in variants)
-    print(f"wrote {len(variants)} variants ({n_neg} negative controls) to {args.out}")
+    variant_cli(
+        __doc__,
+        default_out=DEFAULT_VARIANTS,
+        add_arguments=add_arguments,
+        check_client=ObjObsSAPClient,
+        check_help="record the service's answer for each variant",
+        make=lambda args, client: generate(args.n, seed=args.seed, min_obs=args.min_obs, client=client),
+        summary=lambda vs: f"{sum(v.negative_control for v in vs)} negative controls",
+    )
 
 
 if __name__ == "__main__":

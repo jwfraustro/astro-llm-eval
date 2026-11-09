@@ -21,7 +21,7 @@ Scoring policy:
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Callable, Protocol
+from typing import Any, Callable
 
 from inspect_ai.model import ChatMessageAssistant
 from inspect_ai.scorer import CORRECT, INCORRECT, NOANSWER, Metric, SampleScore, Score, Target, metric
@@ -30,24 +30,10 @@ from inspect_ai.util import sandbox
 
 from harness.prompts import RESULT_PATH
 from harness.selfreport import parse_self_report, self_report_agreement
-
-# Mechanical failure reasons every file-output task can produce before its own
-# verifier gets a look at the contents.
-NO_OUTPUT_FILE = "no_output_file"
-UNREADABLE_FILE = "unreadable_file"
-INFRA_ERROR = "infra_error"
+from harness.verdict import INFRA_ERROR, NO_OUTPUT_FILE, UNREADABLE_FILE, Verdict  # noqa: F401  (constants re-exported)
 
 # Don't stash arbitrarily large files into the log.
 MAX_STASH_CHARS = 200_000
-
-
-class VerdictLike(Protocol):
-    passed: bool
-    reason: str | None
-    detail: str
-    infra_error: bool
-
-    def as_metadata(self) -> dict: ...
 
 
 def submitted(state: TaskState) -> bool:
@@ -72,7 +58,7 @@ def never_submitted_rate() -> Metric:
     return compute
 
 
-def build_score(verdict: VerdictLike, state: TaskState, result_text: str | None, **extra_metadata: Any) -> Score:
+def build_score(verdict: Verdict, state: TaskState, result_text: str | None, **extra_metadata: Any) -> Score:
     """Turn a verdict into an Inspect ``Score`` with the common metadata."""
     value = NOANSWER if verdict.infra_error else (CORRECT if verdict.passed else INCORRECT)
     submit_message = state.output.completion
@@ -102,12 +88,12 @@ def build_score(verdict: VerdictLike, state: TaskState, result_text: str | None,
 
 
 def file_outcome_scorer(
-    verify_text: Callable[[str, Any, Any], VerdictLike],
+    verify_text: Callable[[str, Any, Any], Verdict],
     variant_cls: type,
     client: Any,
     service_error: type[Exception] | tuple[type[Exception], ...],
     *,
-    verdict_cls: Callable[..., VerdictLike],
+    verdict_cls: type[Verdict],
     result_path: str = RESULT_PATH,
     extra_metadata: Callable[[TaskState], dict[str, Any]] | None = None,
 ) -> Callable[[TaskState, Target], Any]:
@@ -115,8 +101,8 @@ def file_outcome_scorer(
 
     ``verify_text(text, variant, client)`` is the task's pure verifier; it
     may raise ``service_error`` when its service is unreachable. ``verdict_cls``
-    is the task's ``Verdict`` dataclass, constructed positionally as
-    ``(passed, reason, detail)`` for the pre-verification failures here.
+    is the task's ``Verdict`` subclass (see ``harness.verdict``), used for
+    the pre-verification failures raised here.
     ``extra_metadata(state)`` adds task-specific keys to the score metadata.
     """
 

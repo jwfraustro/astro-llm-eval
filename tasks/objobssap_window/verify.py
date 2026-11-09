@@ -14,20 +14,19 @@ different finding from "used the protocol".
 
 from __future__ import annotations
 
-import csv
-import io
 import re
 from dataclasses import dataclass, field
 
-from harness import scoring as _shared
+from harness import csvio as _csvio
+from harness import verdict as _base
+from harness.csvio import CsvError, cell, find_column, read_result_csv
 from harness.objobssap import Interval, ObjObsSAPClient
-from harness.selfreport import parse_self_report, self_report_agreement  # noqa: F401  (re-exported)
 from tasks.objobssap_window.variants import WindowVariant
 
 # Mechanical failure reasons.
-NO_OUTPUT_FILE = _shared.NO_OUTPUT_FILE
-UNREADABLE_FILE = _shared.UNREADABLE_FILE
-MISSING_COLUMNS = "missing_columns"
+NO_OUTPUT_FILE = _base.NO_OUTPUT_FILE
+UNREADABLE_FILE = _base.UNREADABLE_FILE
+MISSING_COLUMNS = _csvio.MISSING_COLUMNS
 TIMES_NOT_NUMERIC = "times_not_numeric"
 TIMES_OUTSIDE_WINDOW = "times_outside_window"  # parsed, but nowhere near the requested MJDs: wrong time scale?
 INVERTED_INTERVAL = "inverted_interval"
@@ -35,7 +34,7 @@ EXPECTED_EMPTY_GOT_ROWS = "expected_empty_got_rows"
 EXPECTED_ROWS_GOT_EMPTY = "expected_rows_got_empty"  # classic "bad FACILITY -> empty -> done"
 INTERVAL_COUNT_MISMATCH = "interval_count_mismatch"
 INTERVAL_BOUNDARY_MISMATCH = "interval_boundary_mismatch"
-INFRA_ERROR = _shared.INFRA_ERROR
+INFRA_ERROR = _base.INFRA_ERROR
 
 START_COLUMNS = ("t_start_mjd", "t_start", "start_mjd", "start")
 STOP_COLUMNS = ("t_stop_mjd", "t_stop", "stop_mjd", "stop", "t_end_mjd", "t_end", "end_mjd", "end")
@@ -44,64 +43,35 @@ DEFAULT_TOLERANCE_S = 90.0
 
 
 @dataclass
-class Verdict:
-    passed: bool
-    reason: str | None = None
-    detail: str = ""
-    n_rows: int = 0
+class Verdict(_base.Verdict):
     n_expected: int = 0
     max_boundary_error_s: float | None = None
     truth_drift: bool = False  # live service answer differs from the one stored at generation
-    infra_error: bool = False
     in_progress_at_start: str | None = None  # see compare_intervals
-
-    def as_metadata(self) -> dict:
-        return {
-            "passed": self.passed,
-            "reason": self.reason or "pass",
-            "detail": self.detail,
-            "n_rows": self.n_rows,
-            "n_expected": self.n_expected,
-            "max_boundary_error_s": self.max_boundary_error_s,
-            "truth_drift": self.truth_drift,
-            "infra_error": self.infra_error,
-            "in_progress_at_start": self.in_progress_at_start,
-        }
 
 
 # ------------------------------------------------------------------ parsing
 
 
-def _find_column(fieldnames: list[str], candidates: tuple[str, ...]) -> str | None:
-    for c in candidates:
-        if c in fieldnames:
-            return c
-    return None
-
-
 def parse_result_csv(text: str) -> tuple[list[Interval] | None, Verdict | None]:
     try:
-        reader = csv.DictReader(io.StringIO(text))
-        if reader.fieldnames is None:
-            return None, Verdict(False, UNREADABLE_FILE, "empty file")
-        reader.fieldnames = [f.strip().lower() for f in reader.fieldnames]
-        raw = list(reader)
-    except csv.Error as exc:
-        return None, Verdict(False, UNREADABLE_FILE, f"csv parse error: {exc}")
+        table = read_result_csv(text)
+    except CsvError as exc:
+        return None, Verdict(False, exc.reason, exc.detail, n_rows=exc.n_rows)
 
-    c_start = _find_column(reader.fieldnames, START_COLUMNS)
-    c_stop = _find_column(reader.fieldnames, STOP_COLUMNS)
+    c_start = find_column(table.fieldnames, START_COLUMNS)
+    c_stop = find_column(table.fieldnames, STOP_COLUMNS)
     if c_start is None or c_stop is None:
-        return None, Verdict(False, MISSING_COLUMNS, f"need t_start_mjd/t_stop_mjd; got {reader.fieldnames}")
+        return None, Verdict(False, MISSING_COLUMNS, f"need t_start_mjd/t_stop_mjd; got {table.fieldnames}")
 
     out: list[Interval] = []
-    for i, r in enumerate(raw, start=1):
+    for i, r in enumerate(table.rows, start=1):
         try:
-            a, b = float((r.get(c_start) or "").strip()), float((r.get(c_stop) or "").strip())
+            a, b = float(cell(r, c_start)), float(cell(r, c_stop))
         except ValueError:
-            return None, Verdict(False, TIMES_NOT_NUMERIC, f"row {i}: {r.get(c_start)!r}, {r.get(c_stop)!r}", n_rows=len(raw))
+            return None, Verdict(False, TIMES_NOT_NUMERIC, f"row {i}: {r.get(c_start)!r}, {r.get(c_stop)!r}", n_rows=len(table))
         if b < a:
-            return None, Verdict(False, INVERTED_INTERVAL, f"row {i}: stop {b} < start {a}", n_rows=len(raw))
+            return None, Verdict(False, INVERTED_INTERVAL, f"row {i}: stop {b} < start {a}", n_rows=len(table))
         out.append(Interval(a, b))
     return sorted(out, key=lambda iv: iv.t_start), None
 

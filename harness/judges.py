@@ -32,9 +32,11 @@ FAILURE_LABELS: dict[str, str] = {
     "other": "Does not fit any label above; explain in evidence.",
 }
 
-_JUDGE_PROMPT = """You are auditing a transcript in which an AI agent was asked to fetch Gaia DR3
-catalog rows using tools (bash, python, possibly web search). Classify the
-outcome with exactly one label from this list:
+DEFAULT_TASK_DESCRIPTION = "complete an astronomy data-access task"
+
+_JUDGE_PROMPT = """You are auditing a transcript in which an AI agent was asked to {task_description}
+using tools (bash, python, possibly web search). Classify the outcome with
+exactly one label from this list:
 
 {labels}
 
@@ -83,15 +85,23 @@ def label_distribution() -> Metric:
 
 
 @scorer(metrics=[label_distribution()])
-def failure_taxonomy(judge_model: str | None = None, extra_labels: dict[str, str] | None = None):
-    """Classify the transcript. ``extra_labels`` adds task-specific labels
-    (e.g. ``tasks.objobssap_window.task.JUDGE_LABELS``) to the generic set."""
+def failure_taxonomy(
+    judge_model: str | None = None,
+    extra_labels: dict[str, str] | None = None,
+    task_description: str = DEFAULT_TASK_DESCRIPTION,
+):
+    """Classify the transcript.
+
+    ``extra_labels`` adds task-specific labels (e.g.
+    ``tasks.objobssap_window.task.JUDGE_LABELS``) to the generic set.
+    ``task_description`` completes "the agent was asked to ..." in the judge
+    prompt, e.g. ``"fetch Gaia DR3 catalog rows"``."""
     all_labels = {**FAILURE_LABELS, **(extra_labels or {})}
 
     async def score(state: TaskState, target: Target) -> Score:
         judge = get_model(judge_model) if judge_model else get_model(role="judge")
         labels = "\n".join(f"- {k}: {v}" for k, v in all_labels.items())
-        prompt = _JUDGE_PROMPT.format(labels=labels, transcript=render_transcript(state.messages))
+        prompt = _JUDGE_PROMPT.format(task_description=task_description, labels=labels, transcript=render_transcript(state.messages))
         result = await judge.generate(prompt)
         label, evidence = _parse_judgement(result.completion, all_labels)
         return Score(value=label, explanation=evidence, metadata={"judge": str(judge.name), "raw": result.completion[:2000]})

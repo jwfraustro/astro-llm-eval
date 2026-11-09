@@ -13,29 +13,23 @@ Run as a script to (re)generate ``variants.jsonl``::
 from __future__ import annotations
 
 import argparse
-import json
-import math
 import random
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
+
+from harness.geometry import random_sky_position
+from harness.variants import Variant, variant_cli
 
 HERE = Path(__file__).resolve().parent
 DEFAULT_VARIANTS = HERE / "variants.jsonl"
 
 
 @dataclass(frozen=True)
-class ConeVariant:
-    id: str
+class ConeVariant(Variant):
     ra: float  # ICRS, degrees
     dec: float  # ICRS, degrees
     radius: float  # degrees
     n_rows: int
-    seed: int
-
-    @classmethod
-    def from_dict(cls, d: dict) -> "ConeVariant":
-        return cls(**{k: d[k] for k in cls.__dataclass_fields__})
 
 
 def random_cone_center(rng: random.Random) -> tuple[float, float]:
@@ -45,8 +39,7 @@ def random_cone_center(rng: random.Random) -> tuple[float, float]:
     because a cone at |dec| ~ 90 is an unrepresentative edge case for a first
     task. Later tasks can target it deliberately.
     """
-    ra = rng.uniform(0.0, 360.0)
-    dec = math.degrees(math.asin(rng.uniform(-1.0, 1.0)))
+    ra, dec = random_sky_position(rng)
     dec = max(-89.0, min(89.0, dec))
     return round(ra, 4), round(dec, 4)
 
@@ -76,58 +69,29 @@ def generate(
         if verifier is not None and verifier.count_in_cone(ra, dec, radius, limit=n_rows) < n_rows:
             continue
         idx = len(out)
-        out.append(
-            ConeVariant(
-                id=f"gaia_cone-{seed}-{idx:03d}",
-                ra=ra,
-                dec=dec,
-                radius=radius,
-                n_rows=n_rows,
-                seed=seed,
-            )
-        )
+        out.append(ConeVariant(id=f"gaia_cone-{seed}-{idx:03d}", seed=seed, ra=ra, dec=dec, radius=radius, n_rows=n_rows))
     return out
 
 
-def write_variants(variants: list[ConeVariant], path: Path = DEFAULT_VARIANTS) -> None:
-    with path.open("w") as fh:
-        for v in variants:
-            fh.write(json.dumps(asdict(v)) + "\n")
-
-
 def load_variants(path: Path = DEFAULT_VARIANTS) -> list[ConeVariant]:
-    return list(iter_variants(path))
-
-
-def iter_variants(path: Path = DEFAULT_VARIANTS) -> Iterator[ConeVariant]:
-    with Path(path).open() as fh:
-        for line in fh:
-            line = line.strip()
-            if line:
-                yield ConeVariant.from_dict(json.loads(line))
+    return ConeVariant.load(path)
 
 
 def _main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--n", type=int, default=20)
-    ap.add_argument("--seed", type=int, default=2026)
-    ap.add_argument("--radius", type=float, default=0.2)
-    ap.add_argument("--rows", type=int, default=10)
-    ap.add_argument("--out", type=Path, default=DEFAULT_VARIANTS)
-    ap.add_argument("--check", action="store_true", help="verify each cone is satisfiable via MAST TAP")
-    args = ap.parse_args()
+    from harness.tap import GaiaVerifier
 
-    verifier = None
-    if args.check:
-        from harness.tap import GaiaVerifier
+    def add_arguments(ap: argparse.ArgumentParser) -> None:
+        ap.add_argument("--radius", type=float, default=0.2)
+        ap.add_argument("--rows", type=int, default=10)
 
-        verifier = GaiaVerifier()
-        if not verifier.healthcheck():
-            raise SystemExit("MAST TAP healthcheck failed; refusing to generate unchecked variants with --check")
-
-    variants = generate(args.n, seed=args.seed, radius=args.radius, n_rows=args.rows, verifier=verifier)
-    write_variants(variants, args.out)
-    print(f"wrote {len(variants)} variants to {args.out}")
+    variant_cli(
+        __doc__,
+        default_out=DEFAULT_VARIANTS,
+        add_arguments=add_arguments,
+        check_client=GaiaVerifier,
+        check_help="verify each cone is satisfiable via MAST TAP",
+        make=lambda args, client: generate(args.n, seed=args.seed, radius=args.radius, n_rows=args.rows, verifier=client),
+    )
 
 
 if __name__ == "__main__":
