@@ -31,6 +31,8 @@ from harness.tools import web_search_raw
 from tasks.objobssap_window.prompts import SYSTEM_PROMPT, render_user_prompt
 from tasks.objobssap_window.scorer import interval_verify, protocol_use
 from tasks.objobssap_window.variants import DEFAULT_VARIANTS, load_variants
+from tasks.objobssap_window.approvers import rename_nudge
+from inspect_ai.approval import ApprovalPolicy
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_FILE = REPO_ROOT / "sandbox" / "compose.yaml"
@@ -102,6 +104,7 @@ def objobssap_window(
         scorer=[interval_verify(), protocol_use()],
         sandbox=("docker", str(COMPOSE_FILE)),
         time_limit=time_limit,
+        approval=[ApprovalPolicy(rename_nudge(), "*")],
         metadata={"tool_tier": tool_tier, "variants_file": str(variants), "search_tool": search_tool if tool_tier == "search" else None},
         tags=["astro", "objobssap", "vo", f"tier:{tool_tier}"],
     )
