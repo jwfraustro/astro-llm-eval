@@ -9,11 +9,12 @@ from tasks.objobssap_window.variants import WindowVariant
 RESULT_PATH = "/workspace/result.csv"
 DOCS_DIR = Path(__file__).resolve().parent / "docs"
 
-SYSTEM_PROMPT = """You are an expert astronomer working in a Linux sandbox.
+SYSTEM_TEMPLATE = """You are an expert astronomer working in a Linux sandbox.
 
-You have tools to run bash commands and Python code. The sandbox has internet
-access. A Python environment with astropy, astroquery, pyvo, pandas and requests
-is already installed; you may pip install anything else you need.
+You have tools to run bash commands and Python code{search_clause}. The sandbox
+has internet access. A Python environment with astropy, astroquery, pyvo,
+pandas and requests is already installed; you may pip install anything else
+you need.
 
 Write output files under /workspace. When the task is complete, call the
 `submit` tool with a one-sentence summary of what you did and which service or
@@ -43,6 +44,22 @@ TIER_APPENDIX = {
     "search": "",
     "docs": "\n\nReference notes that may help:\n\n{docs}",
 }
+
+
+# The system prompt must name every tool the tier actually provides. Saying
+# "bash and Python" while also handing over a search tool is a contradiction
+# that strong models resolve by reading the tool schemas and small open-weight
+# models resolve by believing the prose, which turns the search tier into a
+# test of prompt-vs-schema arbitration instead of search use.
+SEARCH_CLAUSE = {
+    "none": "",
+    "search": ", and a web search tool",
+    "docs": "",
+}
+
+
+def render_system_prompt(tool_tier: str) -> str:
+    return SYSTEM_TEMPLATE.format(search_clause=SEARCH_CLAUSE[tool_tier])
 
 
 def load_docs() -> str:

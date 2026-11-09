@@ -28,7 +28,7 @@ from inspect_ai.solver import basic_agent, system_message
 from inspect_ai.tool import bash, python, web_search
 
 from harness.tools import web_search_raw
-from tasks.objobssap_window.prompts import SYSTEM_PROMPT, render_user_prompt
+from tasks.objobssap_window.prompts import render_system_prompt, render_user_prompt
 from tasks.objobssap_window.scorer import interval_verify, protocol_use
 from tasks.objobssap_window.variants import DEFAULT_VARIANTS, load_variants
 
@@ -94,7 +94,7 @@ def objobssap_window(
         name=f"objobssap_window_{tool_tier}",
         dataset=MemoryDataset(samples, name=f"objobssap_window[{tool_tier}]"),
         solver=basic_agent(
-            init=system_message(SYSTEM_PROMPT),
+            init=system_message(render_system_prompt(tool_tier)),
             tools=tools,
             message_limit=message_limit,
             submit_description="Call this once /workspace/result.csv has been written, with a one-sentence summary.",
