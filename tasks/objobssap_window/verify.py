@@ -19,13 +19,14 @@ import io
 import re
 from dataclasses import dataclass, field
 
+from harness import scoring as _shared
 from harness.objobssap import Interval, ObjObsSAPClient
 from harness.selfreport import parse_self_report, self_report_agreement  # noqa: F401  (re-exported)
 from tasks.objobssap_window.variants import WindowVariant
 
 # Mechanical failure reasons.
-NO_OUTPUT_FILE = "no_output_file"
-UNREADABLE_FILE = "unreadable_file"
+NO_OUTPUT_FILE = _shared.NO_OUTPUT_FILE
+UNREADABLE_FILE = _shared.UNREADABLE_FILE
 MISSING_COLUMNS = "missing_columns"
 TIMES_NOT_NUMERIC = "times_not_numeric"
 TIMES_OUTSIDE_WINDOW = "times_outside_window"  # parsed, but nowhere near the requested MJDs: wrong time scale?
@@ -34,7 +35,7 @@ EXPECTED_EMPTY_GOT_ROWS = "expected_empty_got_rows"
 EXPECTED_ROWS_GOT_EMPTY = "expected_rows_got_empty"  # classic "bad FACILITY -> empty -> done"
 INTERVAL_COUNT_MISMATCH = "interval_count_mismatch"
 INTERVAL_BOUNDARY_MISMATCH = "interval_boundary_mismatch"
-INFRA_ERROR = "infra_error"
+INFRA_ERROR = _shared.INFRA_ERROR
 
 START_COLUMNS = ("t_start_mjd", "t_start", "start_mjd", "start")
 STOP_COLUMNS = ("t_stop_mjd", "t_stop", "stop_mjd", "stop", "t_end_mjd", "t_end", "end_mjd", "end")

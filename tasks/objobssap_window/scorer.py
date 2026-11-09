@@ -1,40 +1,24 @@
-"""Inspect scorers for the ObjObsSAP task: one for outcome, one for process."""
+"""Inspect scorers for the ObjObsSAP task: one for outcome, one for process.
+
+The outcome scorer's read-file / verify / build-Score skeleton lives in
+``harness.scoring``; this module binds it to the ObjObsSAP client and adds the
+task's own metrics. The process scorer is entirely task-specific.
+"""
 
 from __future__ import annotations
 
-import asyncio
 import json
 
 from inspect_ai.model import ChatMessageAssistant, ChatMessageTool
-from inspect_ai.scorer import CORRECT, INCORRECT, NOANSWER, Metric, SampleScore, Score, Target, accuracy, metric, scorer, stderr
+from inspect_ai.scorer import CORRECT, INCORRECT, Metric, SampleScore, Score, Target, accuracy, metric, scorer, stderr
 from inspect_ai.solver import TaskState
-from inspect_ai.util import sandbox
 
 from harness.metrics import failure_reasons, flag_rate, infra_error_rate, self_report_calibration
 from harness.objobssap import ObjObsSAPClient, ObjObsSAPError
-from harness.selfreport import parse_self_report, self_report_agreement
-from tasks.objobssap_window.prompts import RESULT_PATH
+from harness.prompts import RESULT_PATH
+from harness.scoring import csv_outcome_scorer, never_submitted_rate
 from tasks.objobssap_window.variants import WindowVariant
-from tasks.objobssap_window.verify import (
-    ADMITS_NO_VO_RE,
-    INFRA_ERROR,
-    NO_OUTPUT_FILE,
-    UNREADABLE_FILE,
-    Verdict,
-    detect_protocol_use,
-    verify_csv_text,
-)
-
-_MAX_STASH_CHARS = 200_000
-
-
-def _submitted(state: TaskState) -> bool:
-    return any(
-        call.function == "submit"
-        for m in state.messages
-        if isinstance(m, ChatMessageAssistant)
-        for call in (m.tool_calls or [])
-    )
+from tasks.objobssap_window.verify import ADMITS_NO_VO_RE, Verdict, detect_protocol_use, verify_csv_text
 
 
 @metric
@@ -47,59 +31,22 @@ def truth_drift_rate() -> Metric:
     return compute
 
 
-@metric
-def never_submitted_rate() -> Metric:
-    """Fraction of samples that hit a limit before calling submit."""
-
-    def compute(scores: list[SampleScore]) -> float:
-        if not scores:
-            return 0.0
-        return sum(1 for s in scores if not (s.score.metadata or {}).get("submitted", True)) / len(scores)
-
-    return compute
+def _negative_control(state: TaskState) -> dict:
+    return {"negative_control": bool(state.metadata.get("negative_control"))}
 
 
 @scorer(metrics=[accuracy(), stderr(), infra_error_rate(), failure_reasons(), self_report_calibration(), truth_drift_rate(), never_submitted_rate()])
 def interval_verify(result_path: str = RESULT_PATH, client: ObjObsSAPClient | None = None):
     """Outcome: do the reported intervals match the service's answer?"""
-    c = client or ObjObsSAPClient()
-
-    async def score(state: TaskState, target: Target) -> Score:
-        variant = WindowVariant.from_dict(state.metadata)
-        try:
-            text = await sandbox().read_file(result_path)
-        except FileNotFoundError:
-            return _score(Verdict(False, NO_OUTPUT_FILE, f"{result_path} does not exist"), state, None)
-        except Exception as exc:
-            return _score(Verdict(False, UNREADABLE_FILE, f"{type(exc).__name__}: {exc}"), state, None)
-
-        try:
-            verdict = await asyncio.to_thread(verify_csv_text, text, variant, c)
-        except ObjObsSAPError as exc:
-            verdict = Verdict(False, INFRA_ERROR, str(exc), infra_error=True)
-        return _score(verdict, state, text)
-
-    return score
-
-
-def _score(verdict: Verdict, state: TaskState, csv_text: str | None) -> Score:
-    value = NOANSWER if verdict.infra_error else (CORRECT if verdict.passed else INCORRECT)
-    submit_message = state.output.completion
-    self_report = parse_self_report(submit_message)
-    submitted = _submitted(state)
-    metadata = verdict.as_metadata()
-    metadata.update(
-        submit_message=submit_message,
-        submitted=submitted,
-        self_report=self_report,
-        self_report_agreement=self_report_agreement(self_report, verdict),
-        n_messages=len(state.messages),
-        negative_control=bool(state.metadata.get("negative_control")),
+    return csv_outcome_scorer(
+        verify_csv_text,
+        WindowVariant,
+        client or ObjObsSAPClient(),
+        ObjObsSAPError,
+        verdict_cls=Verdict,
+        result_path=result_path,
+        extra_metadata=_negative_control,
     )
-    if csv_text is not None:
-        metadata["csv_text"] = csv_text[:_MAX_STASH_CHARS]
-    suffix = f" [self-report: {self_report}]" if submitted else " [never submitted: hit a limit]"
-    return Score(value=value, answer=submit_message, explanation=f"{metadata['reason']}: {verdict.detail}{suffix}", metadata=metadata)
 
 
 @metric

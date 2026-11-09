@@ -11,14 +11,15 @@ import csv
 import io
 from dataclasses import dataclass, field
 
+from harness import scoring as _shared
 from harness.geometry import angular_separation_deg
 from harness.tap import GaiaVerifier
 from tasks.gaia_cone.variants import ConeVariant
 
 # Mechanical failure reasons. These are *not* the LLM-judged taxonomy in
 # harness/judges.py; they are what the verifier can establish on its own.
-NO_OUTPUT_FILE = "no_output_file"
-UNREADABLE_FILE = "unreadable_file"
+NO_OUTPUT_FILE = _shared.NO_OUTPUT_FILE
+UNREADABLE_FILE = _shared.UNREADABLE_FILE
 MISSING_COLUMNS = "missing_columns"
 TOO_FEW_ROWS = "too_few_rows"
 SOURCE_ID_NOT_INTEGER = "source_id_not_integer"
@@ -27,7 +28,7 @@ DUPLICATE_SOURCE_ID = "duplicate_source_id"
 UNKNOWN_SOURCE_ID = "unknown_source_id"  # fabricated, or wrong catalog/release
 OUTSIDE_CONE = "outside_cone"
 COORDS_MISMATCH = "coordinates_mismatch"  # real id, made-up position
-INFRA_ERROR = "infra_error"
+INFRA_ERROR = _shared.INFRA_ERROR
 
 REQUIRED_COLUMNS = ("source_id", "ra", "dec")
 

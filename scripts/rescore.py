@@ -21,7 +21,8 @@ from inspect_ai.scorer import CORRECT, INCORRECT, NOANSWER  # noqa: E402
 
 from harness.tap import GaiaVerifier, TAPError  # noqa: E402
 from tasks.gaia_cone.variants import ConeVariant  # noqa: E402
-from tasks.gaia_cone.verify import self_report_agreement, verify_csv_text  # noqa: E402
+from harness.selfreport import self_report_agreement  # noqa: E402
+from tasks.gaia_cone.verify import verify_csv_text  # noqa: E402
 
 SCORER = "tap_verify"
 

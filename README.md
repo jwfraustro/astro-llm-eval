@@ -170,8 +170,10 @@ Open-weight models: see [`infra/runpod/README.md`](infra/runpod/README.md).
 docs/task-ideas.md  backlog of candidate tasks (ADQL, retrieval, reduction)
 sandbox/            Dockerfile + compose.yaml for the agent container (pinned)
 harness/            trusted-side code: MAST TAP + ObjObsSAP clients, geometry,
-                    shared metrics, self-report parsing, LLM judge
-tasks/gaia_cone/    task.py (Inspect task), prompts.py, variants.py/.jsonl,
+                    shared metrics, self-report parsing, LLM judge, plus what
+                    every task shares: prompts.py (system prompt, tool tiers),
+                    agent_task.py (tools + Task wiring), scoring.py (CSV scorer skeleton)
+tasks/gaia_cone/    task.py (Inspect task), prompts.py (user prompt), variants.py/.jsonl,
                     verify.py (pure logic), scorer.py, docs/ (for the docs tier)
 tasks/objobssap_window/  same layout; two scorers (outcome + process)
 configs/models.yaml model registry; edit ids before a run
